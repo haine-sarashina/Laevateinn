@@ -39,6 +39,7 @@ pub struct ListMessagesArgs {
     pub account_id: String,
     pub page_token: Option<String>,
     pub max_results: Option<u32>,
+    pub label_id: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -46,6 +47,86 @@ pub struct ListMessagesArgs {
 pub struct MessageDetailArgs {
     pub account_id: String,
     pub message_id: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GmailLabel {
+    pub id: String,
+    pub name: String,
+    pub display_name: String,
+    pub label_type: String,
+    pub messages_unread: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListLabelsResponse {
+    pub labels: Vec<GmailLabel>,
+}
+
+#[tauri::command]
+pub async fn list_labels(
+    account_id: String,
+) -> Result<ListLabelsResponse, AppError> {
+    let client = Client::new();
+    let url = "https://gmail.googleapis.com/gmail/v1/users/me/labels";
+    let mut token = get_valid_token(&account_id).await?;
+
+    let mut response = client
+        .get(url)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(AppError::from)?;
+
+    // Handle 401 — try token refresh
+    if response.status() == 401 {
+        println!("[gmail] 401 received on list_labels, refreshing token for {}", account_id);
+        token = refresh_access_token_for(&account_id).await?;
+        response = client
+            .get(url)
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(AppError::from)?;
+        if response.status() == 401 {
+            let error_text = response.text().await.map_err(AppError::from)?;
+            return Err(AppError::AuthError(format!(
+                "認証が無効です。アカウントを再設定してください。Gmail: {}",
+                error_text
+            )));
+        }
+    }
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.map_err(AppError::from)?;
+        return Err(AppError::ApiError(format!("Gmail API error: {}", error_text)));
+    }
+
+    let json: serde_json::Value = response.json().await.map_err(AppError::from)?;
+
+    let labels: Vec<GmailLabel> = json.get("labels")
+        .and_then(|l| l.as_array())
+        .map(|arr| {
+            arr.iter().filter_map(|l| {
+                let raw_name = l.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                let display_name = l.get("displayName")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or(&raw_name)
+                    .to_string();
+                Some(GmailLabel {
+                    id: l.get("id")?.as_str()?.to_string(),
+                    name: raw_name,
+                    display_name,
+                    label_type: l.get("type")?.as_str()?.to_string(),
+                    messages_unread: l.get("messagesUnread").and_then(|v| v.as_u64()).unwrap_or(0),
+                })
+            }).collect()
+        })
+        .unwrap_or_default();
+
+    Ok(ListLabelsResponse { labels })
 }
 
 async fn get_valid_token(account_id: &str) -> Result<String, AppError> {
@@ -267,13 +348,14 @@ pub async fn list_messages(
     account_id: String,
     page_token: Option<String>,
     max_results: Option<u32>,
+    label_id: Option<String>,
 ) -> Result<ListMessagesResponse, AppError> {
     let max_results = max_results.unwrap_or(20);
     let client = Client::new();
-    println!("[gmail] list_messages: account_id={}, page_token={:?}, max_results={}", account_id, page_token, max_results);
+    println!("[gmail] list_messages: account_id={}, page_token={:?}, max_results={}, label_id={:?}", account_id, page_token, max_results, label_id);
     let mut token = get_valid_token(&account_id).await?;
 
-    let do_list_request = |token: &str, page_token: Option<&str>| {
+    let do_list_request = |token: &str, page_token: Option<&str>, label_id: Option<&str>| {
         let client = &client;
         let max_results = max_results;
         let mut request = client
@@ -285,15 +367,20 @@ pub async fn list_messages(
                 request = request.query(&[("pageToken", pt)]);
             }
         }
+        if let Some(lid) = label_id {
+            if !lid.is_empty() {
+                request = request.query(&[("labelIds", lid)]);
+            }
+        }
         request.send()
     };
 
-    let mut response = do_list_request(&token, page_token.as_deref()).await.map_err(AppError::from)?;
+    let mut response = do_list_request(&token, page_token.as_deref(), label_id.as_deref()).await.map_err(AppError::from)?;
 
     if response.status() == 401 {
         println!("[gmail] 401 received, refreshing token for {}", account_id);
         token = refresh_access_token_for(&account_id).await?;
-        response = do_list_request(&token, page_token.as_deref()).await.map_err(AppError::from)?;
+        response = do_list_request(&token, page_token.as_deref(), label_id.as_deref()).await.map_err(AppError::from)?;
         if response.status() == 401 {
             println!("[gmail] still 401 after token refresh for {} - credentials may be invalid", account_id);
             let error_text = response.text().await.map_err(AppError::from)?;

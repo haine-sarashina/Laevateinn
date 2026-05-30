@@ -1,5 +1,5 @@
-import { listMessages, getMessageDetails } from "$lib/api";
-import type { GmailMessageDetail, GmailListResponse } from "$lib/api";
+import { listMessages, getMessageDetails, listLabels } from "$lib/api";
+import type { GmailMessageDetail, GmailListResponse, GmailLabel, GmailLabelsResponse } from "$lib/api";
 import { errorStore } from "./errorStore.svelte";
 import { authStore } from "./authStore.svelte";
 
@@ -40,6 +40,34 @@ class EmailStore {
     hasMore = $state(true);
     maxResults = 20;
 
+    // Label support
+    labels = $state<GmailLabel[]>([]);
+    currentLabelId = $state<string | null>(null);
+
+    /**
+     * Fetches labels for the active account.
+     * Filters to show only relevant system and user labels.
+     */
+    async loadLabels() {
+        try {
+            const accountId = authStore.activeAccountId;
+            if (!accountId) return;
+
+            const response: GmailLabelsResponse = await listLabels(accountId);
+            this.labels = response.labels || [];
+        } catch (e) {
+            console.error('[emailStore] Failed to load labels', e);
+        }
+    }
+
+    /**
+     * Switches to a label. Null means "show all" (default inbox view).
+     */
+    async selectLabel(labelId: string | null) {
+        this.currentLabelId = labelId;
+        this.refresh();
+    }
+
     async loadMessages(refresh = false, explicitPageToken?: string) {
         if (refresh) {
             this.messages = [];
@@ -57,7 +85,7 @@ class EmailStore {
                 return;
             }
 
-            const response: GmailListResponse = await listMessages(accountId, explicitPageToken, this.maxResults);
+            const response: GmailListResponse = await listMessages(accountId, this.currentLabelId, explicitPageToken, this.maxResults);
             const newMessages = response.messages || [];
             const tokenFromResponse = response.nextPageToken || null;
 
@@ -200,6 +228,7 @@ class EmailStore {
         this.error = null;
         this.isAuthErrorFlag = false;
         this.isMoreLoading = false;
+        this.loadLabels();
         this.loadMessages(true);
     }
 }

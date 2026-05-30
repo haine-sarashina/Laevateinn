@@ -8,7 +8,7 @@ pub mod callback_server;
 
 use commands::auth::{start_auth_flow, get_accounts, add_account, remove_account, switch_active_for_account};
 use commands::logger::log_message;
-use commands::gmail::{list_messages, get_message_details};
+use commands::gmail::{list_messages, get_message_details, list_labels};
 
 const STATE_FILE: &str = "window-state.json";
 
@@ -142,6 +142,7 @@ pub fn run() {
             switch_active_for_account,
             list_messages,
             get_message_details,
+            list_labels,
             log_message
         ])
         .run(tauri::generate_context!())

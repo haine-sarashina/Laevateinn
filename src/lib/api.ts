@@ -90,16 +90,30 @@ export interface GmailMessageDetail {
     body: string;
 }
 
+export interface GmailLabel {
+    id: string;
+    name: string;
+    displayName: string;
+    labelType: string;
+    messagesUnread: number;
+}
+
+export interface GmailLabelsResponse {
+    labels: GmailLabel[];
+}
+
 /**
  * Fetches paginated message list from the backend.
  */
 export async function listMessages(
     accountId: string,
+    labelId?: string,
     pageToken?: string,
     maxResults = 20,
 ): Promise<GmailListResponse> {
     return await safeInvoke<GmailListResponse>('list_messages', {
         accountId,
+        labelId: labelId || null,
         pageToken: pageToken || null,
         maxResults: maxResults,
     });
@@ -110,4 +124,11 @@ export async function listMessages(
  */
 export async function getMessageDetails(accountId: string, messageId: string): Promise<GmailMessageDetail> {
     return await safeInvoke<GmailMessageDetail>('get_message_details', { accountId, messageId });
+}
+
+/**
+ * Fetches the list of labels from the backend.
+ */
+export async function listLabels(accountId: string): Promise<GmailLabelsResponse> {
+    return await safeInvoke<GmailLabelsResponse>('list_labels', { accountId });
 }
