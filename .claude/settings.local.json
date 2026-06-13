@@ -108,7 +108,9 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:1420)",
       "Bash(kill %1)",
       "PowerShell(Get-Process *PS C:\\\\dev\\\\Laevateinn> pnpm run dev\r\r> Laevateinn@0.1.0 dev C:\\\\dev\\\\Laevateinn\r> node ./scripts/start-vite-and-tauri.cjs\r\r[sync-window-state] state file: C:\\\\Users\\\\haine\\\\AppData\\\\Roaming\\\\com.haine.laevateinn-mail\\\\.window-state.json\r[sync-window-state] no state file found, using defaults\r🚀 Starting Vite on port 54113...\rWaiting for Vite to be ready...\rFailed to start: Timeout waiting for Vite\r ELIFECYCLE  Command failed with exit code 1.\rPS C:\\\\dev\\\\Laevateinn>)",
-      "Bash(del *)"
+      "Bash(del *)",
+      "Skill(boss-team)",
+      "Bash(dir *)"
     ]
   }
 }

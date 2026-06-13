@@ -639,9 +639,78 @@ pub async fn get_message_details(
     Ok(MessageDetail {
         id: message_id,
         snippet,
-        subject,
         from,
         date,
         body,
     })
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SendEmailArgs {
+    pub account_id: String,
+    pub to: String,
+    pub subject: String,
+    pub body: String,
+}
+
+#[tauri::command]
+pub async fn send_email(
+    account_id: String,
+    to: String,
+    subject: String,
+    body: String,
+) -> Result<(), AppError> {
+    let client = Client::new();
+    let url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+    let mut token = get_valid_token(&account_id).await?;
+
+    // Build RFC 2822 compliant email raw string
+    let raw = format!(
+        "To: {}\r\nSubject: {}\r\nContent-Type: text/html; charset=UTF-8\r\nMIME-Version: 1.0\r\n\r\n{}",
+        to, subject, body
+    );
+
+    let raw_encoded = base64::Engine::encode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        raw.as_bytes(),
+    );
+
+    let payload = serde_json::json!({ "raw": raw_encoded });
+
+    let mut response = client
+        .post(url)
+        .bearer_auth(&token)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(AppError::from)?;
+
+    // Handle 401 — try token refresh
+    if response.status() == 401 {
+        println!("[gmail] 401 received on send_email, refreshing token for {}", account_id);
+        token = refresh_access_token_for(&account_id).await?;
+        response = client
+            .post(url)
+            .bearer_auth(&token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(AppError::from)?;
+        if response.status() == 401 {
+            let error_text = response.text().await.map_err(AppError::from)?;
+            return Err(AppError::AuthError(format!(
+                "認証が無効です。アカウントを再設定してください。Gmail: {}",
+                error_text
+            )));
+        }
+    }
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.map_err(AppError::from)?;
+        return Err(AppError::ApiError(format!("Gmail API error: {}", error_text)));
+    }
+
+    println!("[gmail] email sent successfully for {}", account_id);
+    Ok(())
 }

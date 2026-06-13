@@ -132,3 +132,15 @@ export async function getMessageDetails(accountId: string, messageId: string): P
 export async function listLabels(accountId: string): Promise<GmailLabelsResponse> {
     return await safeInvoke<GmailLabelsResponse>('list_labels', { accountId });
 }
+
+/**
+ * Sends an email via Gmail API.
+ */
+export async function sendEmail(
+    accountId: string,
+    to: string,
+    subject: string,
+    body: string,
+): Promise<void> {
+    return await safeInvoke<void>('send_email', { accountId, to, subject, body });
+}

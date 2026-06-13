@@ -8,7 +8,7 @@ pub mod callback_server;
 
 use commands::auth::{start_auth_flow, get_accounts, add_account, remove_account, switch_active_for_account};
 use commands::logger::log_message;
-use commands::gmail::{list_messages, get_message_details, list_labels};
+use commands::gmail::{list_messages, get_message_details, list_labels, send_email};
 
 const STATE_FILE: &str = "window-state.json";
 
@@ -93,6 +93,9 @@ pub fn run() {
                     let _ = win.maximize();
                 }
 
+                // Show window after state is restored (tauri.conf.json has visible: false)
+                let _ = win.show();
+
                 // Save state on close and exit
                 let save_handle = app_handle.clone();
                 let close_win = win.clone();
@@ -143,6 +146,7 @@ pub fn run() {
             list_messages,
             get_message_details,
             list_labels,
+            send_email,
             log_message
         ])
         .run(tauri::generate_context!())
