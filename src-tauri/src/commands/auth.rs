@@ -245,7 +245,19 @@ fn generate_state() -> String {
 }
 
 #[tauri::command]
-pub async fn start_auth_flow() -> Result<serde_json::Value, AppError> {
+pub async fn start_auth_flow(app: tauri::AppHandle) -> Result<serde_json::Value, AppError> {
+    // Start the callback server on-demand (idempotent — no-op if already running).
+    crate::callback_server::start_server(app.clone());
+
+    // Auto-shutdown after 5 minutes as a safety net.
+    // If the OAuth callback is processed earlier, handle_request will shut down
+    // the server immediately. This timeout handles cases where the user never
+    // completes the flow.
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        crate::callback_server::stop_callback_server();
+    });
+
     let (verifier, challenge) = generate_pkce_challenge();
     let state = generate_state();
 

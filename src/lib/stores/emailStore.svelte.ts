@@ -40,6 +40,9 @@ class EmailStore {
     hasMore = $state(true);
     maxResults = 20;
 
+    // Compose state
+    isComposing = $state(false);
+
     // Label support
     labels = $state<GmailLabel[]>([]);
     currentLabelId = $state<string | null>(null);
@@ -219,6 +222,17 @@ class EmailStore {
         } finally {
             this.isMoreLoading = false;
         }
+    }
+
+    startComposing() {
+        if (!authStore.activeAccountId) {
+            return;
+        }
+        this.isComposing = true;
+    }
+
+    cancelComposing() {
+        this.isComposing = false;
     }
 
     refresh() {

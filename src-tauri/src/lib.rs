@@ -119,10 +119,8 @@ pub fn run() {
                 });
             }
 
-            tauri::async_runtime::spawn(async move {
-                let _ = app_handle;
-                callback_server::start_server(app_handle);
-            });
+            // Note: Callback server is now started on-demand in start_auth_flow.
+            // Boot-time start removed to minimize port exposure time.
 
             // Periodic cleanup of expired PKCE verifiers
             tauri::async_runtime::spawn(async {

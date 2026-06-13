@@ -4,6 +4,7 @@
     import { emailStore } from "$lib/stores/emailStore.svelte";
     import EmailList from "$lib/components/EmailList.svelte";
     import EmailDetail from "$lib/components/EmailDetail.svelte";
+    import ComposeEmail from "$lib/components/ComposeEmail.svelte";
     import Toast from "$lib/components/ui/Toast.svelte";
     import { safeInvoke } from "$lib/api";
     import { openUrl } from "@tauri-apps/plugin-opener";
@@ -36,6 +37,8 @@
                 Add Google Account
             </button>
         </div>
+    {:else if emailStore.isComposing && authStore.activeAccountId}
+        <ComposeEmail accountId={authStore.activeAccountId} />
     {:else}
         <div class="email-container">
             <div class="list-panel">

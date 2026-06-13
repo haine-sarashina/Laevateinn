@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, EventTarget, Manager};
 use tiny_http::{Server, Request, Response, StatusCode};
 use std::fs;
@@ -7,6 +9,16 @@ use std::time::Duration;
 
 pub const CALLBACK_PORT: u16 = 62000;
 pub const CALLBACK_REDIRECT_URI: &str = "http://localhost:62000/callback";
+
+/// Global server state for lifecycle management.
+/// shutdown_flag is set by handle_request after processing the OAuth callback,
+/// causing the accept loop to exit (within ~1 second due to read_timeout).
+static CALLBACK_SERVER_STATE: OnceLock<CallbackServerState> = OnceLock::new();
+
+struct CallbackServerState {
+    shutdown_flag: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
+}
 
 fn read_dev_url() -> Option<String> {
     if let Ok(dev_url) = std::env::var("TAURI_DEV_URL") {
@@ -223,10 +235,29 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
         &format!("<html><body style=\"font-family:Arial,sans-serif;text-align:center;padding:40px\"><h1>認証完了</h1><p>アカウント「{}」を追加しました。<br>ブラウザを閉じて、アプリに戻ってください。</p></body></html>", escaped_email)
     };
     let _ = request.respond(Response::from_string(success_html).with_status_code(StatusCode(200)));
+
+    // OAuth callback processed — shut down the server to minimize port exposure.
+    stop_callback_server();
 }
 
 pub fn start_server(app: tauri::AppHandle) {
-    std::thread::spawn(move || {
+    let state = CALLBACK_SERVER_STATE.get_or_init(|| CallbackServerState {
+        shutdown_flag: Arc::new(AtomicBool::new(false)),
+        running: Arc::new(AtomicBool::new(false)),
+    });
+
+    // Idempotent: do nothing if the server is already running.
+    if state.running.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    // Reset shutdown flag for fresh start.
+    state.shutdown_flag.store(false, Ordering::SeqCst);
+
+    let shutdown_flag = state.shutdown_flag.clone();
+    let running = state.running.clone();
+
+    tauri::async_runtime::spawn(async move {
         use socket2::{Domain, Protocol, Socket, Type};
         use std::net::{SocketAddr, TcpListener};
 
@@ -248,12 +279,41 @@ pub fn start_server(app: tauri::AppHandle) {
 
         println!("[callback_server] listening on port {}", CALLBACK_PORT);
 
+        // Accept loop with shutdown support.
+        // The incoming_requests() iterator blocks internally, but the socket's
+        // read_timeout (1s) ensures it periodically wakes up.
+        // We check the shutdown flag before spawning each request handler.
         for request in server.incoming_requests() {
-            let app = app.clone();
+            if shutdown_flag.load(Ordering::SeqCst) {
+                break;
+            }
             println!("[callback_server] incoming request");
+            let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 handle_request(request, app).await;
             });
         }
+
+        running.store(false, Ordering::SeqCst);
+        println!("[callback_server] stopped");
     });
+}
+
+/// Stop the callback server (graceful shutdown).
+/// Sets the shutdown flag; the accept loop checks this between requests
+/// and exits within ~1 second (bounded by read_timeout on the socket).
+pub fn stop_callback_server() {
+    if let Some(state) = CALLBACK_SERVER_STATE.get() {
+        state.shutdown_flag.store(true, Ordering::SeqCst);
+        println!("[callback_server] shutdown requested");
+    }
+}
+
+/// Check if the callback server is currently running.
+pub fn is_running() -> bool {
+    if let Some(state) = CALLBACK_SERVER_STATE.get() {
+        state.running.load(Ordering::SeqCst)
+    } else {
+        false
+    }
 }

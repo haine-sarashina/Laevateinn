@@ -99,6 +99,11 @@
     {/if}
 
     <div class="sidebar-footer">
+        {#if authStore.activeAccountId}
+            <button class="compose-btn" onclick={() => emailStore.startComposing()}>
+                Compose New Message
+            </button>
+        {/if}
         <button class="add-account-btn" onclick={handleAddAccount}>
             + Add Account
         </button>
@@ -289,5 +294,22 @@
 
     .add-account-btn:hover {
         background-color: #15803d;
+    }
+
+    .compose-btn {
+        width: 100%;
+        padding: 0.75rem;
+        background-color: #4285f4;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: bold;
+        font-family: inherit;
+        margin-bottom: 0.5rem;
+    }
+
+    .compose-btn:hover {
+        background-color: #357ae8;
     }
 </style>
