@@ -639,6 +639,7 @@ pub async fn get_message_details(
     Ok(MessageDetail {
         id: message_id,
         snippet,
+        subject,
         from,
         date,
         body,

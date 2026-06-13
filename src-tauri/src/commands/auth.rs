@@ -31,7 +31,6 @@ struct TokenResponse {
 }
 
 pub const SERVICE_NAME: &str = "laevateinn-mail";
-pub const ACTIVE_ACCOUNT_KEY: &str = "active_account";
 const ACCOUNTS_LIST_KEY: &str = "accounts_list";
 /// Default client credentials (used when env vars are not set)
 const DEFAULT_CLIENT_ID: &str = "199450902096-mbc7ucd7777rtek56gnprac1mcfjobuk.apps.googleusercontent.com";
@@ -145,10 +144,9 @@ pub async fn get_accounts() -> Result<Vec<AccountInfo>, AppError> {
 }
 
 #[tauri::command]
-pub async fn switch_active_for_account(id: String) -> Result<(), AppError> {
-    let entry = Entry::new(SERVICE_NAME, ACTIVE_ACCOUNT_KEY)?;
-    entry.set_password(&id)?;
-    info!("Switched active account to: {}", id);
+pub async fn switch_active_for_account(_id: String) -> Result<(), AppError> {
+    // No-op: active account management is handled entirely on the frontend.
+    // Kept for backwards compatibility with the frontend invoke call.
     Ok(())
 }
 
@@ -195,15 +193,6 @@ pub async fn remove_account(app: tauri::AppHandle, id: String) -> Result<(), App
     let mut list = get_accounts_list()?;
     list.retain(|x| x != &id);
     save_accounts_list(&list)?;
-
-    let active_entry = Entry::new(SERVICE_NAME, ACTIVE_ACCOUNT_KEY)?;
-    if active_entry.get_password().unwrap_or_default() == id {
-        if let Some(first) = list.first() {
-            active_entry.set_password(first)?;
-        } else {
-            active_entry.set_password("").ok();
-        }
-    }
 
     info!("Removed account: {}", id);
     let _ = app.emit("oauth-account-removed", &id);
