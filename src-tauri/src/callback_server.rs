@@ -18,10 +18,20 @@ fn read_dev_url() -> Option<String> {
     config["build"]["devUrl"].as_str().map(|s| s.to_string())
 }
 
+fn escape_html(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 fn error_page(msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let escaped_msg = escape_html(msg);
     let body = format!(
         r#"<html><body style="font-family:Arial,sans-serif;text-align:center;padding:40px"><h1>エラー</h1><p>{}</p><p>ブラウザを閉じて、アプリからもう一度お試しください。</p></body></html>"#,
-        msg
+        escaped_msg
     );
     Response::from_string(body).with_status_code(StatusCode(500))
 }
@@ -209,7 +219,8 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
         r#"<html><body style="font-family:Arial,sans-serif;text-align:center;padding:40px">
 <h1>認証完了</h1><p>ブラウザを閉じて、アプリに戻ってください。</p></body></html>"#
     } else {
-        &format!("<html><body style=\"font-family:Arial,sans-serif;text-align:center;padding:40px\"><h1>認証完了</h1><p>アカウント「{}」を追加しました。<br>ブラウザを閉じて、アプリに戻ってください。</p></body></html>", email)
+        let escaped_email = escape_html(&email);
+        &format!("<html><body style=\"font-family:Arial,sans-serif;text-align:center;padding:40px\"><h1>認証完了</h1><p>アカウント「{}」を追加しました。<br>ブラウザを閉じて、アプリに戻ってください。</p></body></html>", escaped_email)
     };
     let _ = request.respond(Response::from_string(success_html).with_status_code(StatusCode(200)));
 }
