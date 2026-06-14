@@ -2,6 +2,8 @@ import { listMessages, getMessageDetails, listLabels } from "$lib/api";
 import type { GmailMessageDetail, GmailListResponse, GmailLabel, GmailLabelsResponse } from "$lib/api";
 import { errorStore } from "./errorStore.svelte";
 import { authStore } from "./authStore.svelte";
+import { groupMessagesByThread } from "$lib/threads";
+import type { ThreadSummary } from "$lib/threads";
 
 export interface EmailMessage {
     id: string;
@@ -39,6 +41,12 @@ class EmailStore {
     nextPageToken = $state<string | null>(null);
     hasMore = $state(true);
     maxResults = 20;
+
+    // Thread grouping
+    threads = $derived(groupMessagesByThread(this.messages));
+
+    // Expanded thread tracking (set of threadIds)
+    expandedThreads = $state<Set<string>>(new Set());
 
     // Compose state
     isComposing = $state(false);
@@ -88,7 +96,7 @@ class EmailStore {
                 return;
             }
 
-            const response: GmailListResponse = await listMessages(accountId, this.currentLabelId, explicitPageToken, this.maxResults);
+            const response: GmailListResponse = await listMessages(accountId, this.currentLabelId ?? undefined, explicitPageToken, this.maxResults);
             const newMessages = response.messages || [];
             const tokenFromResponse = response.nextPageToken || null;
 
@@ -235,15 +243,62 @@ class EmailStore {
         this.isComposing = false;
     }
 
-    refresh() {
+    reset() {
         this.nextPageToken = null;
         this.hasMore = true;
         this.messages = [];
+        this.selectedMessage = null;
         this.error = null;
         this.isAuthErrorFlag = false;
+        this.isLoading = false;
+        this.isDetailsLoading = false;
         this.isMoreLoading = false;
+        this.expandedThreads = new Set();
+        this.currentLabelId = null;
+        this.labels = [];
+        this.isComposing = false;
+    }
+
+    refresh() {
+        this.reset();
         this.loadLabels();
         this.loadMessages(true);
+    }
+
+    /**
+     * Toggles whether a thread is expanded in the UI.
+     */
+    toggleThread(threadId: string): void {
+        const next = new Set(this.expandedThreads);
+        if (next.has(threadId)) {
+            next.delete(threadId);
+        } else {
+            next.add(threadId);
+        }
+        this.expandedThreads = next;
+    }
+
+    /**
+     * Expands all threads in the list.
+     */
+    expandAllThreads(): void {
+        this.expandedThreads = new Set(this.threads.map(t => t.threadId));
+    }
+
+    /**
+     * Collapse a single thread.
+     */
+    collapseThread(threadId: string): void {
+        const next = new Set(this.expandedThreads);
+        next.delete(threadId);
+        this.expandedThreads = next;
+    }
+
+    /**
+     * Checks if a thread is currently expanded.
+     */
+    isThreadExpanded(threadId: string): boolean {
+        return this.expandedThreads.has(threadId);
     }
 }
 

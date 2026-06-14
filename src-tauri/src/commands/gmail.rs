@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::commands::auth::{get_access_token_for, refresh_access_token_for};
 use crate::error::AppError;
 use reqwest::Client;
+use tauri::Emitter;
 
 #[derive(Debug, Serialize, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -67,6 +68,7 @@ pub struct ListLabelsResponse {
 
 #[tauri::command]
 pub async fn list_labels(
+    app: tauri::AppHandle,
     account_id: String,
 ) -> Result<ListLabelsResponse, AppError> {
     let client = Client::new();
@@ -84,6 +86,7 @@ pub async fn list_labels(
     if response.status() == 401 {
         println!("[gmail] 401 received on list_labels, refreshing token for {}", account_id);
         token = refresh_access_token_for(&account_id).await?;
+        let _ = app.emit("token-refreshed", &account_id);
         response = client
             .get(url)
             .bearer_auth(&token)
@@ -345,6 +348,7 @@ async fn fetch_message_meta(
 
 #[tauri::command]
 pub async fn list_messages(
+    app: tauri::AppHandle,
     account_id: String,
     page_token: Option<String>,
     max_results: Option<u32>,
@@ -380,6 +384,7 @@ pub async fn list_messages(
     if response.status() == 401 {
         println!("[gmail] 401 received, refreshing token for {}", account_id);
         token = refresh_access_token_for(&account_id).await?;
+        let _ = app.emit("token-refreshed", &account_id);
         response = do_list_request(&token, page_token.as_deref(), label_id.as_deref()).await.map_err(AppError::from)?;
         if response.status() == 401 {
             println!("[gmail] still 401 after token refresh for {} - credentials may be invalid", account_id);
@@ -459,6 +464,7 @@ pub async fn list_messages(
 
 #[tauri::command]
 pub async fn get_message_details(
+    app: tauri::AppHandle,
     account_id: String,
     message_id: String,
 ) -> Result<MessageDetail, AppError> {
@@ -476,6 +482,7 @@ pub async fn get_message_details(
     if response.status() == 401 {
         println!("[gmail] 401 received, refreshing token for {}", account_id);
         token = refresh_access_token_for(&account_id).await?;
+        let _ = app.emit("token-refreshed", &account_id);
         response = client
             .get(&url)
             .bearer_auth(&token)
@@ -657,6 +664,7 @@ pub struct SendEmailArgs {
 
 #[tauri::command]
 pub async fn send_email(
+    app: tauri::AppHandle,
     account_id: String,
     to: String,
     subject: String,
@@ -691,6 +699,7 @@ pub async fn send_email(
     if response.status() == 401 {
         println!("[gmail] 401 received on send_email, refreshing token for {}", account_id);
         token = refresh_access_token_for(&account_id).await?;
+        let _ = app.emit("token-refreshed", &account_id);
         response = client
             .post(url)
             .bearer_auth(&token)

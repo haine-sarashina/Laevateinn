@@ -93,8 +93,19 @@ pub fn run() {
                     let _ = win.maximize();
                 }
 
-                // Show window after state is restored (tauri.conf.json has visible: false)
-                let _ = win.show();
+                // Do NOT call win.show() here — the webview hasn't rendered yet,
+                // which causes a white flash. Instead we spawn a short delay to let
+                // the webview load its content before showing.
+                //
+                // Note: on_page_load is only available on WebviewWindowBuilder (build-time),
+                // not on the already-created WebviewWindow instance. A delay-based approach
+                // is the pragmatic solution for Tauri 2 with visible:false windows.
+                let show_win = win.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    println!("[state] showing window after load delay");
+                    let _ = show_win.show();
+                });
 
                 // Save state on close and exit
                 let save_handle = app_handle.clone();

@@ -15,7 +15,11 @@
     let windowReady = $state(false);
     let shown = $state(false);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let unlisten: any = null;
+    let unlistenOAuthAdded: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let unlistenOAuthError: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let unlistenTokenRefreshed: any = null;
 
     let showTimeout = setTimeout(async () => {
         windowReady = true;
@@ -78,7 +82,7 @@
 
     onMount(async () => {
         // Listen for OAuth account-added events from callback server
-        unlisten = await listen<string>("oauth-account-added", async (event) => {
+        unlistenOAuthAdded = await listen<string>("oauth-account-added", async (event) => {
             console.log('[oauth] oauth-account-added event received!', event.payload);
             if (hasRefreshed) {
                 console.log('[oauth] skipping, already refreshed');
@@ -103,9 +107,31 @@
             await showWindow();
         });
 
+        // Listen for OAuth error events from callback server
+        unlistenOAuthError = await listen<string>("oauth-error", async (event) => {
+            console.log('[oauth] oauth-error event received!', event.payload);
+            errorStore.set({ type: "OAuth Error", message: event.payload });
+        });
+
+        // Listen for token-refreshed events from backend (emitted after 401 retry succeeds)
+        unlistenTokenRefreshed = await listen<string>("token-refreshed", (event) => {
+            console.log('[auth] token-refreshed event for account:', event.payload);
+            authStore.notifyTokenRefreshed(event.payload);
+        });
+
         await authStore.initialize();
         const { emailStore } = await import("$lib/stores/emailStore.svelte");
         emailStore.reloginCallback = handleGoogleLogin;
+
+        // Register emailStore.refresh as a token-refresh callback on authStore.
+        // When the backend refreshes an account's token (detected via 401 retry),
+        // this ensures the UI re-fetches data with the new token.
+        authStore.onTokenRefresh((accountId) => {
+            if (authStore.activeAccountId === accountId) {
+                emailStore.refresh();
+            }
+        });
+
         appReady = true;
 
         // Restore window position, size, and maximized state
@@ -119,7 +145,9 @@
     });
 
     onDestroy(() => {
-        if (unlisten) unlisten();
+        if (unlistenOAuthAdded) unlistenOAuthAdded();
+        if (unlistenOAuthError) unlistenOAuthError();
+        if (unlistenTokenRefreshed) unlistenTokenRefreshed();
     });
 </script>
 
