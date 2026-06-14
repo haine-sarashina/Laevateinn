@@ -1,0 +1,26 @@
+# Minimal capability for the Laevateinn mail client.
+# Only grants permissions that the frontend actually uses.
+# Custom commands (#[tauri::command]) do not require permission grants.
+
+identifier = "main-webview"
+description = "Minimal permissions for the main webview"
+windows = ["main"]
+
+permissions = [
+    # Opener plugin: open OAuth URLs in browser
+    "opener:allow-open-url",
+    # Window management: titlebar controls and state restoration
+    "core:window:allow-show",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-inner-size",
+    "core:window:allow-outer-size",
+    "core:window:allow-outer-position",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    # Event system: listen for OAuth callback events
+    "core:event:allow-listen",
+]
