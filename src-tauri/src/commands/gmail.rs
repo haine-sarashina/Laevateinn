@@ -715,3 +715,232 @@ pub async fn send_email(
     println!("[gmail] email sent successfully for {}", account_id);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- is_url_char tests ---
+    #[test]
+    fn is_url_char_alphanumeric() {
+        assert!(is_url_char('a'));
+        assert!(is_url_char('Z'));
+        assert!(is_url_char('9'));
+    }
+
+    #[test]
+    fn is_url_char_allowed_symbols() {
+        assert!(is_url_char('-'));
+        assert!(is_url_char('.'));
+        assert!(is_url_char('/'));
+        assert!(is_url_char('?'));
+        assert!(is_url_char('#'));
+        assert!(is_url_char('@'));
+        assert!(is_url_char('%'));
+    }
+
+    #[test]
+    fn is_url_char_rejects_control_chars() {
+        assert!(!is_url_char('\n'));
+        assert!(!is_url_char('\r'));
+        assert!(!is_url_char('\t'));
+        assert!(!is_url_char('\0'));
+    }
+
+    // --- valid_url_len tests ---
+    #[test]
+    fn valid_url_len_simple_http() {
+        let url = "https://example.com/path?q=1";
+        assert_eq!(valid_url_len(url), url.len());
+    }
+
+    #[test]
+    fn valid_url_len_empty() {
+        assert_eq!(valid_url_len(""), 0);
+    }
+
+    #[test]
+    fn valid_url_len_unicode() {
+        // Each CJK char is 3 bytes in UTF-8, so 3 chars = 9 bytes.
+        // Space is not a valid URL char, so the function stops there.
+        let s = "日本語 hello";
+        assert_eq!(valid_url_len(s), 9);
+    }
+
+    #[test]
+    fn valid_url_len_pure_unicode() {
+        // CJK chars are alphanumeric in Rust (Unicode-aware), so they count
+        assert_eq!(valid_url_len("日本語"), 9); // 3 × 3 bytes
+    }
+
+    #[test]
+    fn valid_url_len_stops_at_newline() {
+        assert_eq!(valid_url_len("hello\nworld"), 5);
+    }
+
+    // --- strip_trailing_punctuation tests ---
+    #[test]
+    fn strip_trailing_strips_period() {
+        assert_eq!(strip_trailing_punctuation("https://x.com."), "https://x.com");
+    }
+
+    #[test]
+    fn strip_trailing_strips_multiple() {
+        assert_eq!(strip_trailing_punctuation("https://x.com..."), "https://x.com");
+    }
+
+    #[test]
+    fn strip_trailing_strips_closing_paren() {
+        assert_eq!(strip_trailing_punctuation("https://x.com)"), "https://x.com");
+    }
+
+    #[test]
+    fn strip_trailing_no_change_if_none() {
+        let url = "https://example.com/path";
+        assert_eq!(strip_trailing_punctuation(url), url);
+    }
+
+    #[test]
+    fn strip_trailing_strips_comma_semicolon_colon() {
+        assert_eq!(strip_trailing_punctuation("https://x.com;,:"), "https://x.com");
+    }
+
+    // --- plain_text_to_html tests (HIGH VALUE) ---
+    #[test]
+    fn plain_text_to_html_escapes_ampersand() {
+        assert_eq!(plain_text_to_html("a & b"), "a &amp; b<br>");
+    }
+
+    #[test]
+    fn plain_text_to_html_escapes_less_than() {
+        assert_eq!(plain_text_to_html("<div>"), "&lt;div&gt;<br>");
+    }
+
+    #[test]
+    fn plain_text_to_html_converts_newlines() {
+        assert_eq!(plain_text_to_html("line1\nline2"), "line1<br>line2<br>");
+    }
+
+    #[test]
+    fn plain_text_to_html_links_https_url() {
+        let result = plain_text_to_html("Visit https://example.com please");
+        assert!(result.contains(r#"href="https://example.com""#));
+        assert!(result.contains(r#"target="_blank""#));
+        assert!(result.contains("</a>"));
+    }
+
+    #[test]
+    fn plain_text_to_html_links_http_url() {
+        let result = plain_text_to_html("See http://old-site.org");
+        assert!(result.contains(r#"href="http://old-site.org""#));
+    }
+
+    #[test]
+    fn plain_text_to_html_links_ftp_url() {
+        let result = plain_text_to_html("Files at ftp://files.example.com/pub");
+        assert!(result.contains(r#"href="ftp://files.example.com/pub""#));
+    }
+
+    #[test]
+    fn plain_text_to_html_strips_trailing_punctuation_from_url() {
+        let result = plain_text_to_html("Go to https://example.com. Now.");
+        // The period after the URL should be stripped from href, then re-added as text
+        assert!(result.contains(r#"href="https://example.com""#));
+    }
+
+    #[test]
+    fn plain_text_to_html_handles_multiple_urls() {
+        let result = plain_text_to_html("A https://a.com and http://b.org end");
+        assert!(result.contains(r#"href="https://a.com""#));
+        assert!(result.contains(r#"href="http://b.org""#));
+    }
+
+    #[test]
+    fn plain_text_to_html_amps_in_url_are_escaped() {
+        let result = plain_text_to_html("https://example.com?foo=1&bar=2");
+        // The href attribute should escape & to &amp;
+        assert!(result.contains("&amp;"));
+    }
+
+    #[test]
+    fn plain_text_to_html_empty_string() {
+        assert_eq!(plain_text_to_html(""), "<br>");
+    }
+
+    #[test]
+    fn plain_text_to_html_only_newlines() {
+        assert_eq!(plain_text_to_html("\n\n"), "<br><br><br>");
+    }
+
+    // --- extract_headers_recursive tests ---
+    #[test]
+    fn extract_headers_finds_subject() {
+        let payload = serde_json::json!({
+            "headers": [{"name": "Subject", "value": "Test Subject"}]
+        });
+        let (mut subj, mut from, mut date) = ("".to_string(), "".to_string(), "".to_string());
+        extract_headers_recursive(&payload, &mut subj, &mut from, &mut date);
+        assert_eq!(subj, "Test Subject");
+    }
+
+    #[test]
+    fn extract_headers_case_insensitive() {
+        let payload = serde_json::json!({
+            "headers": [
+                {"name": "subject", "value": "lowercase subject"},
+                {"name": "FROM", "value": "User <user@example.com>"},
+                {"name": "date", "value": "Mon, 1 Jan 2024"}
+            ]
+        });
+        let (mut subj, mut from, mut date) = ("".to_string(), "".to_string(), "".to_string());
+        extract_headers_recursive(&payload, &mut subj, &mut from, &mut date);
+        assert_eq!(subj, "lowercase subject");
+        assert_eq!(from, "User <user@example.com>");
+        assert_eq!(date, "Mon, 1 Jan 2024");
+    }
+
+    #[test]
+    fn extract_headers_nested_parts() {
+        let payload = serde_json::json!({
+            "headers": [],
+            "parts": [{
+                "headers": [{"name": "Subject", "value": "Nested Subject"}],
+                "parts": []
+            }]
+        });
+        let (mut subj, _, _) = ("".to_string(), "".to_string(), "".to_string());
+        extract_headers_recursive(&payload, &mut subj, &mut String::new(), &mut String::new());
+        assert_eq!(subj, "Nested Subject");
+    }
+
+    #[test]
+    fn extract_headers_no_headers_key() {
+        let payload = serde_json::json!({});
+        let (mut subj, mut from, mut date) = ("".to_string(), "".to_string(), "".to_string());
+        extract_headers_recursive(&payload, &mut subj, &mut from, &mut date);
+        assert!(subj.is_empty());
+        assert!(from.is_empty());
+        assert!(date.is_empty());
+    }
+
+    #[test]
+    fn extract_headers_deeply_nested() {
+        let payload = serde_json::json!({
+            "headers": [{"name": "Subject", "value": "Outer Subject"}],
+            "parts": [{
+                "mimeType": "multipart/mixed",
+                "headers": [],
+                "parts": [{
+                    "headers": [
+                        {"name": "From", "value": "Deep Sender <deep@test.com>"}
+                    ],
+                    "parts": []
+                }]
+            }]
+        });
+        let (mut subj, mut from, _) = ("".to_string(), "".to_string(), "".to_string());
+        extract_headers_recursive(&payload, &mut subj, &mut from, &mut String::new());
+        assert_eq!(subj, "Outer Subject"); // outer takes precedence
+        assert_eq!(from, "Deep Sender <deep@test.com>");
+    }
+}

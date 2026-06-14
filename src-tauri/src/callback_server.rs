@@ -317,3 +317,74 @@ pub fn is_running() -> bool {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- escape_html tests ---
+    #[test]
+    fn escape_html_escapes_ampersand() {
+        assert_eq!(escape_html("cat & dog"), "cat &amp; dog");
+    }
+
+    #[test]
+    fn escape_html_escapes_less_than() {
+        assert_eq!(escape_html("<div>"), "&lt;div&gt;");
+    }
+
+    #[test]
+    fn escape_html_escapes_double_quotes() {
+        assert_eq!(escape_html(r#"say "hi""#), r#"say &quot;hi&quot;"#);
+    }
+
+    #[test]
+    fn escape_html_escapes_single_quotes() {
+        assert_eq!(escape_html("it's"), "it&#x27;s");
+    }
+
+    #[test]
+    fn escape_html_xss_prevention() {
+        assert_eq!(
+            escape_html("<script>alert('x')&done</script>"),
+            "&lt;script&gt;alert(&#x27;x&#x27;)&amp;done&lt;/script&gt;"
+        );
+    }
+
+    #[test]
+    fn escape_html_empty_string() {
+        assert_eq!(escape_html(""), "");
+    }
+
+    #[test]
+    fn escape_html_plain_text_unchanged() {
+        assert_eq!(escape_html("Hello, World! 123"), "Hello, World! 123");
+    }
+
+    // --- parse_query_params tests ---
+    #[test]
+    fn parse_query_params_single() {
+        let result = parse_query_params("foo=bar");
+        assert_eq!(result.get("foo"), Some(&"bar".to_string()));
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn parse_query_params_multiple() {
+        let result = parse_query_params("code=abc123&state=xyz789");
+        assert_eq!(result.get("code"), Some(&"abc123".to_string()));
+        assert_eq!(result.get("state"), Some(&"xyz789".to_string()));
+    }
+
+    #[test]
+    fn parse_query_params_empty() {
+        let result = parse_query_params("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_query_params_url_decodes() {
+        let result = parse_query_params("email=user%40example.com");
+        assert_eq!(result.get("email"), Some(&"user@example.com".to_string()));
+    }
+}

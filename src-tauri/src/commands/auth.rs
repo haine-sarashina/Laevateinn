@@ -319,3 +319,172 @@ pub async fn refresh_access_token_for(account_id: &str) -> Result<String, AppErr
         Err(AppError::AuthError(format!("トークン更新のレスポンス解析に失敗しました。再ログインしてください。")))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper to clean up VERIFIER_STORE between tests
+    fn clear_verifier_store() {
+        if let Ok(mut store) = VERIFIER_STORE.write() {
+            store.clear();
+        }
+    }
+
+    // --- generate_pkce_challenge tests ---
+    #[test]
+    fn pkce_verifier_length_is_64() {
+        let (verifier, _) = generate_pkce_challenge();
+        assert_eq!(verifier.len(), 64);
+    }
+
+    #[test]
+    fn pkce_verifier_contains_only_valid_chars() {
+        let (verifier, _) = generate_pkce_challenge();
+        for c in verifier.chars() {
+            assert!(
+                c.is_ascii_alphanumeric() || c == '-' || c == '_',
+                "verifier contains invalid char: {}",
+                c
+            );
+        }
+    }
+
+    #[test]
+    fn pkce_challenge_is_base64url_encoded() {
+        let (_, challenge) = generate_pkce_challenge();
+        for c in challenge.chars() {
+            assert!(
+                c.is_ascii_alphanumeric() || c == '-' || c == '_',
+                "challenge contains invalid char: {}",
+                c
+            );
+        }
+    }
+
+    #[test]
+    fn pkce_challenge_is_sha256_of_verifier() {
+        let (verifier, challenge) = generate_pkce_challenge();
+        let expected_hash = sha2::Sha256::digest(verifier.as_bytes());
+        let expected_challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(expected_hash);
+        assert_eq!(challenge, expected_challenge);
+    }
+
+    #[test]
+    fn pkce_different_calls_produce_different_verifiers() {
+        let (v1, _) = generate_pkce_challenge();
+        let (v2, _) = generate_pkce_challenge();
+        assert_ne!(v1, v2);
+    }
+
+    // --- generate_state tests ---
+    #[test]
+    fn state_length_is_32() {
+        let state = generate_state();
+        assert_eq!(state.len(), 32);
+    }
+
+    #[test]
+    fn state_contains_only_lowercase_letters() {
+        let state = generate_state();
+        for c in state.chars() {
+            assert!(c.is_ascii_lowercase(), "state contains non-lowercase char: {}", c);
+        }
+    }
+
+    #[test]
+    fn state_different_calls_produce_different_values() {
+        let s1 = generate_state();
+        let s2 = generate_state();
+        assert_ne!(s1, s2);
+    }
+
+    // --- verify_and_get_verifier tests ---
+    #[test]
+    fn verify_and_get_verifier_returns_verifier_for_valid_state() {
+        clear_verifier_store();
+        let state = "test_state_123";
+        let verifier = "test_verifier_value";
+        VERIFIER_STORE.write().unwrap().insert(
+            state.to_string(),
+            VerifierEntry {
+                verifier: verifier.to_string(),
+                created_at: std::time::Instant::now(),
+            },
+        );
+        let result = verify_and_get_verifier(state);
+        assert_eq!(result, Some(verifier.to_string()));
+    }
+
+    #[test]
+    fn verify_and_get_verifier_returns_none_for_missing_state() {
+        clear_verifier_store();
+        let result = verify_and_get_verifier("nonexistent_state");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn verify_and_get_verifier_consumes_entry() {
+        clear_verifier_store();
+        let state = "consume_test";
+        VERIFIER_STORE.write().unwrap().insert(
+            state.to_string(),
+            VerifierEntry {
+                verifier: "v".to_string(),
+                created_at: std::time::Instant::now(),
+            },
+        );
+        assert!(verify_and_get_verifier(state).is_some());
+        assert!(verify_and_get_verifier(state).is_none()); // consumed
+    }
+
+    // --- cleanup_expired_verifiers tests ---
+    #[test]
+    fn cleanup_removes_expired_entries() {
+        clear_verifier_store();
+        let state = "expired_state";
+        VERIFIER_STORE.write().unwrap().insert(
+            state.to_string(),
+            VerifierEntry {
+                verifier: "v".to_string(),
+                created_at: std::time::Instant::now()
+                    - std::time::Duration::from_secs(VERIFIER_TTL_SECS + 10),
+            },
+        );
+        cleanup_expired_verifiers();
+        let result = verify_and_get_verifier(state);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn cleanup_keeps_valid_entries() {
+        clear_verifier_store();
+        let state = "valid_state";
+        VERIFIER_STORE.write().unwrap().insert(
+            state.to_string(),
+            VerifierEntry {
+                verifier: "valid_v".to_string(),
+                created_at: std::time::Instant::now(),
+            },
+        );
+        cleanup_expired_verifiers();
+        let result = verify_and_get_verifier(state);
+        assert_eq!(result, Some("valid_v".to_string()));
+    }
+
+    #[test]
+    fn expired_verifier_returns_none() {
+        clear_verifier_store();
+        let state = "too_old_state";
+        VERIFIER_STORE.write().unwrap().insert(
+            state.to_string(),
+            VerifierEntry {
+                verifier: "v".to_string(),
+                created_at: std::time::Instant::now()
+                    - std::time::Duration::from_secs(VERIFIER_TTL_SECS + 1),
+            },
+        );
+        let result = verify_and_get_verifier(state);
+        assert!(result.is_none()); // expired, so None
+    }
+}
