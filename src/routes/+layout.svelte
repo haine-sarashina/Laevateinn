@@ -214,7 +214,6 @@
 
     .titlebar-btn {
         -webkit-app-region: no-drag;
-        app-region: no-drag;
         width: 46px;
         height: 32px;
         border: none;

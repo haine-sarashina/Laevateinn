@@ -7,13 +7,14 @@ const MAX_RETRIES = 1;
 async function invokeWithTimeout<T>(command: string, args?: Record<string, any>): Promise<T> {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
+            clearTimeout(timer);
             reject(new Error(`Command "${command}" timed out after ${COMMAND_TIMEOUT_MS}ms`));
         }, COMMAND_TIMEOUT_MS);
 
         invoke<T>(command, args)
             .then(resolve)
             .catch(reject)
-            .finally(clearTimeout(timer));
+            .finally(() => clearTimeout(timer));
     });
 }
 

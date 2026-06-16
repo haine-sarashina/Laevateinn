@@ -1,7 +1,7 @@
 <script lang="ts">
     import { emailStore } from "$lib/stores/emailStore.svelte";
 
-    let scrollContainer: HTMLElement;
+    let scrollContainer: HTMLElement | null = $state.raw(null);
 
     $effect(() => {
         if (emailStore.selectedMessage && scrollContainer) {

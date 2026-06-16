@@ -526,7 +526,7 @@ pub async fn get_message_details(
     let mut cid_map: Vec<(String, String)> = Vec::new();
 
     fn search_parts(part: &serde_json::Value, text_ref: &mut String, html_ref: &mut String, cids: &mut Vec<(String, String)>) {
-        let mime = part["mimeType"].as_str().unwrap_or("unknown");
+        let _mime = part["mimeType"].as_str().unwrap_or("unknown");
 
         // Extract Content-ID and charset from headers
         let (content_id, charset) = if let Some(headers) = part["headers"].as_array() {
