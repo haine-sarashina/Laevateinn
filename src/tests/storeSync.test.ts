@@ -3,6 +3,227 @@ import * as tauriCore from '@tauri-apps/api/core';
 
 const mockedInvoke = (tauriCore.invoke as any) as ReturnType<typeof vi.fn>;
 
+describe('EmailStore LRU cache integration', () => {
+  beforeEach(() => {
+    mockedInvoke.mockReset();
+    mockedInvoke.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    mockedInvoke.mockRestore();
+  });
+
+  it('getCacheInfo returns valid stats object', async () => {
+    const { emailStore } = await import('$lib/stores/emailStore.svelte');
+    emailStore.reset();
+
+    const info = emailStore.getCacheInfo();
+    expect(info).toHaveProperty('size');
+    expect(info).toHaveProperty('capacity');
+    expect(info).toHaveProperty('totalAdded');
+    expect(info).toHaveProperty('totalEvicted');
+    expect(info).toHaveProperty('resetCount');
+    expect(info.capacity).toBe(500);
+  });
+
+  it('getCacheInfo tracks messages added via loadMessages', async () => {
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+    authStore.activeAccountId = 'test@test.com';
+
+    mockedInvoke.mockResolvedValueOnce({ labels: [] });
+    mockedInvoke.mockResolvedValueOnce({
+      messages: [
+        { id: 'm1', threadId: 't1', snippet: 'first', subject: 'S1', from: 'a@b.com', date: '2026-01-01' },
+        { id: 'm2', threadId: 't2', snippet: 'second', subject: 'S2', from: 'c@d.com', date: '2026-01-02' },
+      ],
+      nextPageToken: null,
+    });
+
+    const { emailStore } = await import('$lib/stores/emailStore.svelte');
+    await emailStore.refresh();
+
+    const info = emailStore.getCacheInfo();
+    expect(info.size).toBe(2);
+    expect(info.totalAdded).toBeGreaterThanOrEqual(2);
+  });
+
+  it('getMessage does O(1) lookup by id', async () => {
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+    authStore.activeAccountId = 'test@test.com';
+
+    mockedInvoke.mockResolvedValueOnce({ labels: [] });
+    mockedInvoke.mockResolvedValueOnce({
+      messages: [
+        { id: 'target', threadId: 't1', snippet: 'found me', subject: 'Target', from: 'a@b.com', date: '2026-01-01' },
+      ],
+      nextPageToken: null,
+    });
+
+    const { emailStore } = await import('$lib/stores/emailStore.svelte');
+    await emailStore.refresh();
+
+    const found = emailStore.getMessage('target');
+    expect(found).toBeDefined();
+    expect(found!.snippet).toBe('found me');
+    expect(emailStore.getMessage('nonexistent')).toBeUndefined();
+  });
+
+  it('evicts oldest messages when cache exceeds capacity', async () => {
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+    authStore.activeAccountId = 'test@test.com';
+
+    // First page (refresh) — mock labels + messages
+    mockedInvoke.mockResolvedValueOnce({ labels: [] });
+
+    // Create 3 messages for first load
+    const firstPage = Array.from({ length: 3 }, (_, i) => ({
+      id: `msg-${i}`,
+      threadId: `t-${i}`,
+      snippet: `snippet ${i}`,
+      subject: `Subject ${i}`,
+      from: 'a@b.com',
+      date: '2026-01-01',
+    }));
+    mockedInvoke.mockResolvedValueOnce({ messages: firstPage, nextPageToken: 'page2' });
+
+    const { emailStore } = await import('$lib/stores/emailStore.svelte');
+    await emailStore.refresh();
+
+    expect(emailStore.messages.length).toBe(3);
+
+    // Lower capacity to trigger eviction on next load
+    (emailStore as any)._cache.capacity = 4;
+
+    // Load more — add 2 new messages, should evict oldest to stay at capacity 4
+    mockedInvoke.mockResolvedValueOnce({
+      messages: [
+        { id: 'msg-new1', threadId: 't-new1', snippet: 'newer', subject: 'New1', from: 'b@c.com', date: '2026-01-03' },
+        { id: 'msg-new2', threadId: 't-new2', snippet: 'newest', subject: 'New2', from: 'c@d.com', date: '2026-01-04' },
+      ],
+      nextPageToken: null,
+    });
+
+    await emailStore.loadMoreMessages();
+
+    const info = emailStore.getCacheInfo();
+    expect(info.size).toBeLessThanOrEqual(4);
+    expect(info.totalEvicted).toBeGreaterThanOrEqual(1); // At least msg-0 should be evicted
+  });
+
+  it('loadMessageDetail updates cache entry', async () => {
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+    authStore.activeAccountId = 'test@test.com';
+
+    mockedInvoke.mockResolvedValueOnce({ labels: [] });
+    mockedInvoke.mockResolvedValueOnce({
+      messages: [
+        { id: 'detail-me', threadId: 't1', snippet: 'before', subject: 'Old', from: 'old@x.com', date: '2026-01-01' },
+      ],
+      nextPageToken: null,
+    });
+
+    const { emailStore } = await import('$lib/stores/emailStore.svelte');
+    await emailStore.refresh();
+
+    // Verify initial state
+    expect(emailStore.getMessage('detail-me')!.snippet).toBe('before');
+
+    // Mock getMessageDetails response
+    mockedInvoke.mockResolvedValueOnce({
+      id: 'detail-me',
+      snippet: 'updated snippet',
+      subject: 'Updated Subject',
+      from: 'new@y.com',
+      date: '2026-01-05',
+      body: 'Full body text',
+    });
+
+    await emailStore.loadMessageDetail('detail-me');
+
+    // Cache entry should be updated
+    const updated = emailStore.getMessage('detail-me');
+    expect(updated!.snippet).toBe('updated snippet');
+    expect(updated!.subject).toBe('Updated Subject');
+    expect(updated!.read).toBe(true);
+  });
+
+  it('reset clears the LRU cache', async () => {
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+    authStore.activeAccountId = 'test@test.com';
+
+    mockedInvoke.mockResolvedValueOnce({ labels: [] });
+    mockedInvoke.mockResolvedValueOnce({
+      messages: [
+        { id: 'x', threadId: 'tx', snippet: 'hi', subject: 'Hi', from: 'a@b.com', date: '2026-01-01' },
+      ],
+      nextPageToken: null,
+    });
+
+    const { emailStore } = await import('$lib/stores/emailStore.svelte');
+    await emailStore.refresh();
+    expect(emailStore.messages.length).toBeGreaterThanOrEqual(1);
+
+    emailStore.reset();
+    expect(emailStore.messages.length).toBe(0);
+    expect(emailStore.getCacheInfo().size).toBe(0);
+  });
+
+  it('messages array is sorted newest-first by insertion order', async () => {
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+    authStore.activeAccountId = 'test@test.com';
+
+    mockedInvoke.mockResolvedValueOnce({ labels: [] });
+    mockedInvoke.mockResolvedValueOnce({
+      messages: [
+        { id: 'a', threadId: 'ta', snippet: 'A', subject: 'A', from: 'a@b.com', date: '2026-01-01' },
+        { id: 'b', threadId: 'tb', snippet: 'B', subject: 'B', from: 'c@d.com', date: '2026-01-02' },
+        { id: 'c', threadId: 'tc', snippet: 'C', subject: 'C', from: 'e@f.com', date: '2026-01-03' },
+      ],
+      nextPageToken: null,
+    });
+
+    const { emailStore } = await import('$lib/stores/emailStore.svelte');
+    await emailStore.refresh();
+
+    // Last-inserted message should appear first in array
+    expect(emailStore.messages[0].id).toBe('c');
+    expect(emailStore.messages[1].id).toBe('b');
+    expect(emailStore.messages[2].id).toBe('a');
+  });
+
+  it('loadMoreMessages deduplicates against cache', async () => {
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+    authStore.activeAccountId = 'test@test.com';
+
+    mockedInvoke.mockResolvedValueOnce({ labels: [] });
+    mockedInvoke.mockResolvedValueOnce({
+      messages: [
+        { id: 'existing', threadId: 't1', snippet: 'orig', subject: 'S', from: 'a@b.com', date: '2026-01-01' },
+      ],
+      nextPageToken: 'next',
+    });
+
+    const { emailStore } = await import('$lib/stores/emailStore.svelte');
+    await emailStore.refresh();
+
+    // Load more with duplicate
+    mockedInvoke.mockResolvedValueOnce({
+      messages: [
+        { id: 'existing', threadId: 't1', snippet: 'changed', subject: 'S2', from: 'a@b.com', date: '2026-01-01' },
+        { id: 'new-one', threadId: 't2', snippet: 'fresh', subject: 'Fresh', from: 'x@y.com', date: '2026-01-02' },
+      ],
+      nextPageToken: null,
+    });
+
+    await emailStore.loadMoreMessages();
+
+    // Should have 2 entries: existing (not overwritten) + new-one
+    expect(emailStore.messages.length).toBe(2);
+    expect(emailStore.getMessage('existing')!.snippet).toBe('orig'); // not overwritten
+    expect(emailStore.getMessage('new-one')!.snippet).toBe('fresh');
+  });
+});
+
 describe('EmailStore.reset()', () => {
   beforeEach(() => {
     mockedInvoke.mockReset();

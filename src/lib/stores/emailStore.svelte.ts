@@ -4,6 +4,7 @@ import { errorStore } from "./errorStore.svelte";
 import { authStore } from "./authStore.svelte";
 import { groupMessagesByThread } from "$lib/threads";
 import type { ThreadSummary } from "$lib/threads";
+import { LRUMessageCache } from "./lruCache";
 
 export interface EmailMessage {
     id: string;
@@ -15,6 +16,21 @@ export interface EmailMessage {
     body: string;
     read: boolean;
 }
+
+export interface CacheInfo {
+    /** Current number of messages in the cache. */
+    size: number;
+    /** Maximum allowed messages before eviction triggers. */
+    capacity: number;
+    /** Total number of messages ever added (including evicted). */
+    totalAdded: number;
+    /** Total number of messages evicted due to capacity limit. */
+    totalEvicted: number;
+    /** Number of times the cache was reset. */
+    resetCount: number;
+}
+
+const DEFAULT_CACHE_CAPACITY = 500;
 
 function isAuthError(e: unknown): boolean {
     if (e instanceof Error) {
@@ -29,8 +45,26 @@ function isAuthError(e: unknown): boolean {
     return false;
 }
 
+function toEmailMessage(m: { id: string; threadId: string; snippet: string; subject: string; from: string; date: string }): EmailMessage {
+    return {
+        id: m.id,
+        threadId: m.threadId,
+        snippet: m.snippet,
+        subject: m.subject,
+        from: m.from,
+        date: m.date,
+        body: '',
+        read: false,
+    };
+}
+
 class EmailStore {
+    // LRU-backed message cache with configurable capacity
+    private _cache = new LRUMessageCache(DEFAULT_CACHE_CAPACITY);
+
+    /** Reactive array of messages — derived from the LRU cache. */
     messages = $state<EmailMessage[]>([]);
+
     selectedMessage = $state<GmailMessageDetail | null>(null);
     isLoading = $state(false);
     isDetailsLoading = $state(false);
@@ -56,6 +90,13 @@ class EmailStore {
     currentLabelId = $state<string | null>(null);
 
     /**
+     * Synchronize the reactive messages array from the internal LRU cache.
+     */
+    private _syncMessages(): void {
+        this.messages = this._cache.toArray();
+    }
+
+    /**
      * Fetches labels for the active account.
      * Filters to show only relevant system and user labels.
      */
@@ -76,12 +117,13 @@ class EmailStore {
      */
     async selectLabel(labelId: string | null) {
         this.currentLabelId = labelId;
-        this.refresh();
+        await this.refresh();
     }
 
     async loadMessages(refresh = false, explicitPageToken?: string) {
         if (refresh) {
-            this.messages = [];
+            this._cache.clear();
+            this._syncMessages();
             this.hasMore = true;
         }
 
@@ -101,16 +143,10 @@ class EmailStore {
             const tokenFromResponse = response.nextPageToken || null;
 
             if (refresh) {
-                this.messages = newMessages.map(m => ({
-                    id: m.id,
-                    threadId: m.threadId,
-                    snippet: m.snippet,
-                    subject: m.subject,
-                    from: m.from,
-                    date: m.date,
-                    body: '',
-                    read: false,
-                }));
+                // Batch add all messages from fresh load
+                const emailMsgs = newMessages.map(m => toEmailMessage(m));
+                this._cache.addBatch(emailMsgs);
+                this._syncMessages();
                 this.nextPageToken = tokenFromResponse;
                 this.hasMore = tokenFromResponse !== null;
             } else {
@@ -122,9 +158,8 @@ class EmailStore {
                     return true;
                 });
 
-                // Deduplicate against existing store
-                const existingIds = new Set(this.messages.map(m => m.id));
-                const unique = dedupedIncoming.filter(m => !existingIds.has(m.id));
+                // Deduplicate against existing cache
+                const unique = dedupedIncoming.filter(m => !this._cache.has(m.id));
 
                 if (unique.length === 0) {
                     if (tokenFromResponse) {
@@ -135,19 +170,9 @@ class EmailStore {
                         this.nextPageToken = null;
                     }
                 } else {
-                    this.messages = [
-                        ...this.messages,
-                        ...unique.map(m => ({
-                            id: m.id,
-                            threadId: m.threadId,
-                            snippet: m.snippet,
-                            subject: m.subject,
-                            from: m.from,
-                            date: m.date,
-                            body: '',
-                            read: false,
-                        })),
-                    ];
+                    const emailMsgs = unique.map(m => toEmailMessage(m));
+                    this._cache.addBatch(emailMsgs);
+                    this._syncMessages();
                     this.nextPageToken = tokenFromResponse;
                     this.hasMore = tokenFromResponse !== null;
                 }
@@ -184,13 +209,17 @@ class EmailStore {
             const detail = await getMessageDetails(accountId, messageId);
             this.selectedMessage = detail;
 
-            const msg = this.messages.find(m => m.id === messageId);
-            if (msg) {
-                msg.read = true;
-                msg.snippet = detail.snippet;
-                msg.subject = detail.subject;
-                msg.from = detail.from;
-                msg.date = detail.date;
+            // Update message in cache
+            const cached = this._cache.get(messageId);
+            if (cached) {
+                cached.read = true;
+                cached.snippet = detail.snippet;
+                cached.subject = detail.subject;
+                cached.from = detail.from;
+                cached.date = detail.date;
+                // Re-add to update in cache
+                this._cache.add(cached);
+                this._syncMessages();
             }
         } catch (e) {
             if (e instanceof Error) {
@@ -246,7 +275,8 @@ class EmailStore {
     reset() {
         this.nextPageToken = null;
         this.hasMore = true;
-        this.messages = [];
+        this._cache.clear();
+        this._syncMessages();
         this.selectedMessage = null;
         this.error = null;
         this.isAuthErrorFlag = false;
@@ -259,10 +289,10 @@ class EmailStore {
         this.isComposing = false;
     }
 
-    refresh() {
+    async refresh() {
         this.reset();
-        this.loadLabels();
-        this.loadMessages(true);
+        await this.loadLabels();
+        await this.loadMessages(true);
     }
 
     /**
@@ -299,6 +329,20 @@ class EmailStore {
      */
     isThreadExpanded(threadId: string): boolean {
         return this.expandedThreads.has(threadId);
+    }
+
+    /**
+     * Returns cache statistics for monitoring memory usage.
+     */
+    getCacheInfo(): CacheInfo {
+        return this._cache.stats();
+    }
+
+    /**
+     * Directly look up a message by ID (O(1) via internal Map).
+     */
+    getMessage(id: string): EmailMessage | undefined {
+        return this._cache.get(id);
     }
 }
 

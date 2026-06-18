@@ -323,6 +323,7 @@ pub async fn refresh_access_token_for(account_id: &str) -> Result<String, AppErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     // Helper to clean up VERIFIER_STORE between tests
     fn clear_verifier_store() {
@@ -399,7 +400,8 @@ mod tests {
         assert_ne!(s1, s2);
     }
 
-    // --- verify_and_get_verifier tests ---
+    // --- verify_and_get_verifier tests --- (#[serial] for global VERIFIER_STORE)
+    #[serial]
     #[test]
     fn verify_and_get_verifier_returns_verifier_for_valid_state() {
         clear_verifier_store();
@@ -416,6 +418,7 @@ mod tests {
         assert_eq!(result, Some(verifier.to_string()));
     }
 
+    #[serial]
     #[test]
     fn verify_and_get_verifier_returns_none_for_missing_state() {
         clear_verifier_store();
@@ -423,6 +426,7 @@ mod tests {
         assert!(result.is_none());
     }
 
+    #[serial]
     #[test]
     fn verify_and_get_verifier_consumes_entry() {
         clear_verifier_store();
@@ -438,7 +442,8 @@ mod tests {
         assert!(verify_and_get_verifier(state).is_none()); // consumed
     }
 
-    // --- cleanup_expired_verifiers tests ---
+    // --- cleanup_expired_verifiers tests --- (#[serial] for global VERIFIER_STORE)
+    #[serial]
     #[test]
     fn cleanup_removes_expired_entries() {
         clear_verifier_store();
@@ -456,6 +461,7 @@ mod tests {
         assert!(result.is_none());
     }
 
+    #[serial]
     #[test]
     fn cleanup_keeps_valid_entries() {
         clear_verifier_store();
@@ -472,6 +478,7 @@ mod tests {
         assert_eq!(result, Some("valid_v".to_string()));
     }
 
+    #[serial]
     #[test]
     fn expired_verifier_returns_none() {
         clear_verifier_store();

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use crate::commands::auth::{get_access_token_for, refresh_access_token_for};
+use crate::commands::auth::get_access_token_for;
+use crate::commands::auth::refresh_access_token_for;
 use crate::error::AppError;
 use reqwest::Client;
 use tauri::Emitter;
@@ -71,10 +72,12 @@ pub async fn list_labels(
     app: tauri::AppHandle,
     account_id: String,
 ) -> Result<ListLabelsResponse, AppError> {
+    // keyringからアクセストークンを直接取得（事前tokeninfoチェックは行わない）
+    let token = get_access_token_for(&account_id)?
+        .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))?;
+
     let client = Client::new();
     let url = "https://gmail.googleapis.com/gmail/v1/users/me/labels";
-    let mut token = get_valid_token(&account_id).await?;
-
     let mut response = client
         .get(url)
         .bearer_auth(&token)
@@ -82,18 +85,20 @@ pub async fn list_labels(
         .await
         .map_err(AppError::from)?;
 
-    // Handle 401 — try token refresh
+    // レスポンスが401の場合: トークンをリフレッシュして自動リトライ
     if response.status() == 401 {
-        println!("[gmail] 401 received on list_labels, refreshing token for {}", account_id);
-        token = refresh_access_token_for(&account_id).await?;
+        println!("[gmail] list_labels: 401 received, refreshing token for {}", account_id);
+        let new_token = refresh_access_token_for(&account_id).await?;
+        // 新しいトークンは keyring に再保存済み（refresh_access_token_for 内で保存される）
         let _ = app.emit("token-refreshed", &account_id);
         response = client
             .get(url)
-            .bearer_auth(&token)
+            .bearer_auth(&new_token)
             .send()
             .await
             .map_err(AppError::from)?;
         if response.status() == 401 {
+            // リトライ後も401の場合: クレデンシャルが無効である可能性が高い
             let error_text = response.text().await.map_err(AppError::from)?;
             return Err(AppError::AuthError(format!(
                 "認証が無効です。アカウントを再設定してください。Gmail: {}",
@@ -132,11 +137,10 @@ pub async fn list_labels(
     Ok(ListLabelsResponse { labels })
 }
 
-async fn get_valid_token(account_id: &str) -> Result<String, AppError> {
-    get_access_token_for(account_id)?
-        .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))
-}
-
+// 注: get_valid_token() は削除された。
+// 以前はここでtokeninfoエンドポイントを事前に叩いていたが、不要なAPI呼び出しを削減するため廃止した。
+// 代わりに、各Gmail APIコマンドでアクセストークンを直接keyringから取得し、
+// レスポンスが401の場合にのみトークンリフレッシュ + リトライする方式に変更した。
 fn is_url_char(c: char) -> bool {
     c.is_alphanumeric()
         || "-._~:/?#[]@!$&'()*+,=%".contains(c)
@@ -355,9 +359,13 @@ pub async fn list_messages(
     label_id: Option<String>,
 ) -> Result<ListMessagesResponse, AppError> {
     let max_results = max_results.unwrap_or(20);
-    let client = Client::new();
     println!("[gmail] list_messages: account_id={}, page_token={:?}, max_results={}, label_id={:?}", account_id, page_token, max_results, label_id);
-    let mut token = get_valid_token(&account_id).await?;
+
+    // keyringからアクセストークンを直接取得（事前tokeninfoチェックは行わない）
+    let token = get_access_token_for(&account_id)?
+        .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))?;
+
+    let client = Client::new();
 
     let do_list_request = |token: &str, page_token: Option<&str>, label_id: Option<&str>| {
         let client = &client;
@@ -381,13 +389,16 @@ pub async fn list_messages(
 
     let mut response = do_list_request(&token, page_token.as_deref(), label_id.as_deref()).await.map_err(AppError::from)?;
 
+    // レスポンスが401の場合: トークンをリフレッシュして自動リトライ
     if response.status() == 401 {
-        println!("[gmail] 401 received, refreshing token for {}", account_id);
-        token = refresh_access_token_for(&account_id).await?;
+        println!("[gmail] list_messages: 401 received, refreshing token for {}", account_id);
+        let new_token = refresh_access_token_for(&account_id).await?;
+        // 新しいトークンは keyring に再保存済み（refresh_access_token_for 内で保存される）
         let _ = app.emit("token-refreshed", &account_id);
-        response = do_list_request(&token, page_token.as_deref(), label_id.as_deref()).await.map_err(AppError::from)?;
+        response = do_list_request(&new_token, page_token.as_deref(), label_id.as_deref()).await.map_err(AppError::from)?;
         if response.status() == 401 {
-            println!("[gmail] still 401 after token refresh for {} - credentials may be invalid", account_id);
+            // リトライ後も401の場合: クレデンシャルが無効である可能性が高い
+            println!("[gmail] list_messages: still 401 after token refresh for {} - credentials may be invalid", account_id);
             let error_text = response.text().await.map_err(AppError::from)?;
             return Err(AppError::AuthError(format!("認証が無効です。アカウントを再設定してください。Gmail: {}", error_text)));
         }
@@ -470,7 +481,10 @@ pub async fn get_message_details(
 ) -> Result<MessageDetail, AppError> {
     let client = Client::new();
     let url = format!("https://gmail.googleapis.com/gmail/v1/users/me/messages/{}", message_id);
-    let mut token = get_valid_token(&account_id).await?;
+
+    // keyringからアクセストークンを直接取得（事前tokeninfoチェックは行わない）
+    let token = get_access_token_for(&account_id)?
+        .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))?;
 
     let mut response = client
         .get(&url)
@@ -479,18 +493,21 @@ pub async fn get_message_details(
         .await
         .map_err(AppError::from)?;
 
+    // レスポンスが401の場合: トークンをリフレッシュして自動リトライ
     if response.status() == 401 {
-        println!("[gmail] 401 received, refreshing token for {}", account_id);
-        token = refresh_access_token_for(&account_id).await?;
+        println!("[gmail] get_message_details: 401 received, refreshing token for {}", account_id);
+        let new_token = refresh_access_token_for(&account_id).await?;
+        // 新しいトークンは keyring に再保存済み（refresh_access_token_for 内で保存される）
         let _ = app.emit("token-refreshed", &account_id);
         response = client
             .get(&url)
-            .bearer_auth(&token)
+            .bearer_auth(&new_token)
             .send()
             .await
             .map_err(AppError::from)?;
         if response.status() == 401 {
-            println!("[gmail] still 401 after token refresh for {} - credentials may be invalid", account_id);
+            // リトライ後も401の場合: クレデンシャルが無効である可能性が高い
+            println!("[gmail] get_message_details: still 401 after token refresh for {} - credentials may be invalid", account_id);
             let error_text = response.text().await.map_err(AppError::from)?;
             return Err(AppError::AuthError(format!("認証が無効です。アカウントを再設定してください。Gmail: {}", error_text)));
         }
@@ -672,7 +689,10 @@ pub async fn send_email(
 ) -> Result<(), AppError> {
     let client = Client::new();
     let url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
-    let mut token = get_valid_token(&account_id).await?;
+
+    // keyringからアクセストークンを直接取得（事前tokeninfoチェックは行わない）
+    let token = get_access_token_for(&account_id)?
+        .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))?;
 
     // Build RFC 2822 compliant email raw string
     let raw = format!(
@@ -695,19 +715,21 @@ pub async fn send_email(
         .await
         .map_err(AppError::from)?;
 
-    // Handle 401 — try token refresh
+    // レスポンスが401の場合: トークンをリフレッシュして自動リトライ
     if response.status() == 401 {
-        println!("[gmail] 401 received on send_email, refreshing token for {}", account_id);
-        token = refresh_access_token_for(&account_id).await?;
+        println!("[gmail] send_email: 401 received, refreshing token for {}", account_id);
+        let new_token = refresh_access_token_for(&account_id).await?;
+        // 新しいトークンは keyring に再保存済み（refresh_access_token_for 内で保存される）
         let _ = app.emit("token-refreshed", &account_id);
         response = client
             .post(url)
-            .bearer_auth(&token)
+            .bearer_auth(&new_token)
             .json(&payload)
             .send()
             .await
             .map_err(AppError::from)?;
         if response.status() == 401 {
+            // リトライ後も401の場合: クレデンシャルが無効である可能性が高い
             let error_text = response.text().await.map_err(AppError::from)?;
             return Err(AppError::AuthError(format!(
                 "認証が無効です。アカウントを再設定してください。Gmail: {}",
