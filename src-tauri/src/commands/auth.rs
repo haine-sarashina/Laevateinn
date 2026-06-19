@@ -270,7 +270,9 @@ pub async fn start_auth_flow(app: tauri::AppHandle) -> Result<serde_json::Value,
     }
 
     let auth_endpoint = "https://accounts.google.com/o/oauth2/v2/auth";
-    let scope = "openid email https://www.googleapis.com/auth/gmail.readonly";
+    // mail.google.com = 完全アクセス（送受信・削除・ラベル操作など）
+    // gmail.settings.basic = 設定系API（Vacation Responder、フィルター管理）
+    let scope = "openid email https://www.googleapis.com/auth/mail.google.com https://www.googleapis.com/auth/gmail.settings.basic";
     let auth_url = format!(
         "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent&code_challenge={}&code_challenge_method=S256&state={}",
         auth_endpoint, CLIENT_ID.as_str(), REDIRECT_URI, scope, challenge, state
