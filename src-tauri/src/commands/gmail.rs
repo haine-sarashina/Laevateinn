@@ -26,6 +26,17 @@ pub struct ListMessagesResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AttachmentInfo {
+    pub filename: String,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    /// Base64-encoded attachment data (inline for smaller files)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MessageDetail {
     pub id: String,
     pub snippet: String,
@@ -33,6 +44,8 @@ pub struct MessageDetail {
     pub from: String,
     pub date: String,
     pub body: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AttachmentInfo>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -542,12 +555,12 @@ pub async fn get_message_details(
     let mut html_body = "".to_string();
     let mut cid_map: Vec<(String, String)> = Vec::new();
 
-    fn search_parts(part: &serde_json::Value, text_ref: &mut String, html_ref: &mut String, cids: &mut Vec<(String, String)>) {
+    fn search_parts(part: &serde_json::Value, text_ref: &mut String, html_ref: &mut String, cids: &mut Vec<(String, String)>, attachments: &mut Vec<AttachmentInfo>) {
         let _mime = part["mimeType"].as_str().unwrap_or("unknown");
 
-        // Extract Content-ID and charset from headers
-        let (content_id, charset) = if let Some(headers) = part["headers"].as_array() {
-            let (mut cid, mut cs): (Option<String>, Option<String>) = (None, None);
+        // Extract Content-ID, charset, and filename from headers
+        let (content_id, charset, filename_hdr) = if let Some(headers) = part["headers"].as_array() {
+            let (mut cid, mut cs, mut fn_name): (Option<String>, Option<String>, Option<String>) = (None, None, None);
             for h in headers {
                 let name = h.get("name").and_then(|n| n.as_str());
                 let value = h.get("value").and_then(|v| v.as_str());
@@ -564,12 +577,20 @@ pub async fn get_message_details(
                                 .map(|s| s.trim_matches(|c| c == '"' || c == '\'').trim().to_string())
                         });
                     }
+                    Some("CONTENT-DISPOSITION") => {
+                        fn_name = value.and_then(|v| {
+                            v.find("filename")
+                                .map(|idx| &v[idx..])
+                                .and_then(|s| s.splitn(2, '=').nth(1))
+                                .map(|s| s.trim_matches('"').trim().to_string())
+                        });
+                    }
                     _ => {}
                 }
             }
-            (cid, cs)
+            (cid, cs, fn_name)
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         if let Some(data) = part["body"]["data"].as_str() {
@@ -618,17 +639,30 @@ pub async fn get_message_details(
                         let data_uri = format!("data:{};base64,{}", mime_type, b64);
                         cids.push((cid.clone(), data_uri));
                     }
+                } else {
+                    // File attachment (PDF, DOC, ZIP, etc.)
+                    if let Some(filename) = &filename_hdr {
+                        let b64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &decoded);
+                        attachments.push(AttachmentInfo {
+                            filename: filename.clone(),
+                            mime_type: mime_type.to_string(),
+                            size_bytes: decoded.len() as u64,
+                            data: Some(b64_data),
+                        });
+                    }
                 }
             }
         }
         if let Some(parts) = part["parts"].as_array() {
             for subpart in parts {
-                search_parts(subpart, text_ref, html_ref, cids);
+                search_parts(subpart, text_ref, html_ref, cids, attachments);
             }
         }
     }
 
-    search_parts(payload, &mut text_body, &mut html_body, &mut cid_map);
+    // Collect attachments alongside body parsing
+    let mut attachments: Vec<AttachmentInfo> = Vec::new();
+    search_parts(payload, &mut text_body, &mut html_body, &mut cid_map, &mut attachments);
 
     // Prefer HTML body for proper rendering; fallback to plain text
     if !html_body.is_empty() {
@@ -667,6 +701,7 @@ pub async fn get_message_details(
         from,
         date,
         body,
+        attachments,
     })
 }
 
@@ -1190,5 +1225,116 @@ mod tests {
         let json_str = serde_json::to_string(&resp).unwrap();
         assert!(json_str.contains("success"));
         assert!(json_str.contains("messageId"));
+    }
+
+    // --- SendEmailArgs serialization tests (CC/BCC) ---
+    #[test]
+    fn send_email_args_with_cc() {
+        let args = SendEmailArgs {
+            account_id: "user@test.com".to_string(),
+            to: "to@example.com".to_string(),
+            subject: "Hello".to_string(),
+            body: "<p>Hi</p>".to_string(),
+            cc: Some("cc@example.com".to_string()),
+            bcc: None,
+        };
+        let json = serde_json::to_value(&args).unwrap();
+        assert_eq!(json["cc"], "cc@example.com");
+        assert!(json["bcc"].is_null());
+    }
+
+    #[test]
+    fn send_email_args_with_bcc() {
+        let args = SendEmailArgs {
+            account_id: "user@test.com".to_string(),
+            to: "to@example.com".to_string(),
+            subject: "Test".to_string(),
+            body: "<p>Body</p>".to_string(),
+            cc: None,
+            bcc: Some("bcc@example.com".to_string()),
+        };
+        let json = serde_json::to_value(&args).unwrap();
+        assert!(json["cc"].is_null());
+        assert_eq!(json["bcc"], "bcc@example.com");
+    }
+
+    #[test]
+    fn send_email_args_with_both_cc_bcc() {
+        let args = SendEmailArgs {
+            account_id: "user@test.com".to_string(),
+            to: "to@example.com".to_string(),
+            subject: "Multi".to_string(),
+            body: "<p>Hi</p>".to_string(),
+            cc: Some("cc@example.com".to_string()),
+            bcc: Some("bcc@example.com".to_string()),
+        };
+        let json = serde_json::to_value(&args).unwrap();
+        assert_eq!(json["cc"], "cc@example.com");
+        assert_eq!(json["bcc"], "bcc@example.com");
+    }
+
+    // --- AttachmentInfo serialization tests ---
+    #[test]
+    fn attachment_info_serializes_pdf() {
+        let att = AttachmentInfo {
+            filename: "report.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            size_bytes: 1024 * 512,
+            data: Some("base64data".to_string()),
+        };
+        let json = serde_json::to_value(&att).unwrap();
+        assert_eq!(json["filename"], "report.pdf");
+        assert_eq!(json["mimeType"], "application/pdf");
+        assert_eq!(json["sizeBytes"], 1024 * 512);
+        assert_eq!(json["data"], "base64data");
+    }
+
+    #[test]
+    fn attachment_info_serializes_without_data() {
+        let att = AttachmentInfo {
+            filename: "large.zip".to_string(),
+            mime_type: "application/zip".to_string(),
+            size_bytes: 1024 * 1024 * 50,
+            data: None,
+        };
+        let json = serde_json::to_value(&att).unwrap();
+        assert!(json.get("data").is_none()); // skip_serializing_if = "Option::is_none"
+    }
+
+    #[test]
+    fn message_detail_with_empty_attachments_skips_field() {
+        let detail = MessageDetail {
+            id: "msg123".to_string(),
+            snippet: "Test email".to_string(),
+            subject: "Hello".to_string(),
+            from: "sender@example.com".to_string(),
+            date: "Mon, 1 Jan 2024".to_string(),
+            body: "<p>Hi</p>".to_string(),
+            attachments: vec![],
+        };
+        let json_str = serde_json::to_string(&detail).unwrap();
+        // Empty attachments should be skipped due to skip_serializing_if
+        assert!(!json_str.contains("attachments"));
+    }
+
+    #[test]
+    fn message_detail_with_attachments_includes_field() {
+        let detail = MessageDetail {
+            id: "msg456".to_string(),
+            snippet: "Email with attachment".to_string(),
+            subject: "Report".to_string(),
+            from: "bot@example.com".to_string(),
+            date: "Tue, 2 Jan 2024".to_string(),
+            body: "<p>See attached</p>".to_string(),
+            attachments: vec![AttachmentInfo {
+                filename: "data.csv".to_string(),
+                mime_type: "text/csv".to_string(),
+                size_bytes: 2048,
+                data: Some("aGVsbG8=".to_string()),
+            }],
+        };
+        let json_str = serde_json::to_string(&detail).unwrap();
+        assert!(json_str.contains("attachments"));
+        assert!(json_str.contains("data.csv"));
     }
 }

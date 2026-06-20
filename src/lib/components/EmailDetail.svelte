@@ -27,6 +27,40 @@
             email: emailMatch?.[1] || from,
         };
     }
+
+    function getFileIcon(mimeType: string): string {
+        if (mimeType.startsWith('image/')) return '🖼';
+        if (mimeType.includes('pdf')) return '📄';
+        if (mimeType.includes('word')) return '📝';
+        if (mimeType.includes('excel') || mimeType.includes('spreadsheet')) return '📊';
+        if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return '📋';
+        if (mimeType.includes('zip') || mimeType.includes('compress')) return '🗜';
+        if (mimeType.startsWith('audio/')) return '🎵';
+        if (mimeType.startsWith('video/')) return '🎬';
+        return '📎';
+    }
+
+    function formatSize(bytes: number): string {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function downloadAttachment(att: { filename: string; mimeType: string; data?: string }) {
+        if (!att.data) return;
+        const binaryString = atob(att.data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: att.mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = att.filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
 </script>
 
 {#if emailStore.selectedMessage}
@@ -109,6 +143,23 @@
             <div class="detail-snippet">
                 <strong>Snippet:</strong> {emailStore.selectedMessage.snippet}
             </div>
+
+            {#if emailStore.selectedMessage.attachments && emailStore.selectedMessage.attachments.length > 0}
+                <div class="attachments-section">
+                    <h3>Attachments ({emailStore.selectedMessage.attachments.length})</h3>
+                    <div class="attachments-list">
+                        {#each emailStore.selectedMessage.attachments as att (att.filename)}
+                            <div class="attachment-item" onclick={() => downloadAttachment(att)}>
+                                <span class="attachment-icon">{getFileIcon(att.mimeType)}</span>
+                                <div class="attachment-info">
+                                    <span class="attachment-name">{att.filename}</span>
+                                    <span class="attachment-size">{formatSize(att.sizeBytes)}</span>
+                                </div>
+                            </div>
+                        {/each}
+                    </div>
+                </div>
+            {/if}
 
             <div class="detail-body">
                 {#if emailStore.selectedMessage.body}
@@ -234,6 +285,67 @@
         margin-bottom: 1.5rem;
         font-size: 0.8125rem;
         color: #d1d5db;
+    }
+
+    .attachments-section {
+        margin-bottom: 1.5rem;
+    }
+
+    .attachments-section h3 {
+        color: #9ca3af;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        margin: 0 0 0.75rem 0;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .attachments-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .attachment-item {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.75rem 1rem;
+        background-color: rgba(255, 255, 255, 0.05);
+        border: 1px solid #374151;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+
+    .attachment-item:hover {
+        background-color: rgba(66, 133, 244, 0.1);
+        border-color: #4285f4;
+    }
+
+    .attachment-icon {
+        font-size: 1.5rem;
+        flex-shrink: 0;
+    }
+
+    .attachment-info {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+    }
+
+    .attachment-name {
+        color: #e5e7eb;
+        font-size: 0.875rem;
+        font-weight: 500;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .attachment-size {
+        color: #6b7280;
+        font-size: 0.75rem;
     }
 
     .detail-body {

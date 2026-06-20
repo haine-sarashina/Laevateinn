@@ -82,6 +82,13 @@ export interface GmailListResponse {
     nextPageToken: string | null;
 }
 
+export interface GmailAttachment {
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    data?: string; // base64 encoded data
+}
+
 export interface GmailMessageDetail {
     id: string;
     snippet: string;
@@ -89,6 +96,7 @@ export interface GmailMessageDetail {
     from: string;
     date: string;
     body: string;
+    attachments?: GmailAttachment[];
 }
 
 export interface GmailLabel {
