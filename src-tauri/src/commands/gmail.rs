@@ -677,6 +677,10 @@ pub struct SendEmailArgs {
     pub to: String,
     pub subject: String,
     pub body: String,
+    #[serde(default)]
+    pub cc: Option<String>,
+    #[serde(default)]
+    pub bcc: Option<String>,
 }
 
 /// 引数構造体: Gmail API messages.modifyLabels
@@ -708,6 +712,8 @@ pub async fn send_email(
     to: String,
     subject: String,
     body: String,
+    cc: Option<String>,
+    bcc: Option<String>,
 ) -> Result<(), AppError> {
     let client = Client::new();
     let url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
@@ -716,11 +722,17 @@ pub async fn send_email(
     let token = get_access_token_for(&account_id)?
         .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))?;
 
-    // Build RFC 2822 compliant email raw string
-    let raw = format!(
-        "To: {}\r\nSubject: {}\r\nContent-Type: text/html; charset=UTF-8\r\nMIME-Version: 1.0\r\n\r\n{}",
-        to, subject, body
-    );
+    // Build RFC 2822 compliant email raw string with optional CC/BCC headers
+    let mut headers = format!("To: {}\r\nSubject: {}\r\n", to, subject);
+    if let Some(cc_addr) = &cc {
+        headers.push_str(&format!("Cc: {}\r\n", cc_addr));
+    }
+    if let Some(bcc_addr) = &bcc {
+        headers.push_str(&format!("Bcc: {}\r\n", bcc_addr));
+    }
+    headers.push_str("Content-Type: text/html; charset=UTF-8\r\nMIME-Version: 1.0\r\n\r\n");
+
+    let raw = format!("{}{}", headers, body);
 
     let raw_encoded = base64::Engine::encode(
         &base64::engine::general_purpose::URL_SAFE_NO_PAD,

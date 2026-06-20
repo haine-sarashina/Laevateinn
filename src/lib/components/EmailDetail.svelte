@@ -44,6 +44,27 @@
                     {emailStore.getMessage(emailStore.selectedMessage.id)?.starred ? '★ Starred' : '☆ Star'}
                 </button>
                 <button
+                    class="action-btn reply-action"
+                    title="Reply"
+                    onclick={() => emailStore.replyToMessage()}
+                >
+                    ↩ Reply
+                </button>
+                <button
+                    class="action-btn reply-all-action"
+                    title="Reply All"
+                    onclick={() => emailStore.replyAllToMessage()}
+                >
+                    ⇄ Reply All
+                </button>
+                <button
+                    class="action-btn forward-action"
+                    title="Forward"
+                    onclick={() => emailStore.forwardMessage()}
+                >
+                    ↪ Forward
+                </button>
+                <button
                     class="action-btn archive-action"
                     title="Archive"
                     onclick={() => { emailStore.archiveMessage(emailStore.selectedMessage.id); }}
@@ -324,5 +345,20 @@
     .archive-action:hover {
         color: #60a5fa;
         border-color: #3b82f6;
+    }
+
+    .reply-action:hover {
+        color: #34d399;
+        border-color: #10b981;
+    }
+
+    .reply-all-action:hover {
+        color: #a78bfa;
+        border-color: #8b5cf6;
+    }
+
+    .forward-action:hover {
+        color: #fbbf24;
+        border-color: #f59e0b;
     }
 </style>

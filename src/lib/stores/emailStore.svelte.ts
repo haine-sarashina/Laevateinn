@@ -86,6 +86,11 @@ class EmailStore {
 
     // Compose state
     isComposing = $state(false);
+    composeMode = $state<'new' | 'reply' | 'reply-all' | 'forward'>('new');
+    composeTo = $state<string>('');
+    composeCc = $state<string>('');
+    composeSubject = $state<string>('');
+    composeBody = $state<string>('');
 
     // Label support
     labels = $state<GmailLabel[]>([]);
@@ -267,11 +272,57 @@ class EmailStore {
         if (!authStore.activeAccountId) {
             return;
         }
+        this.composeMode = 'new';
+        this.composeTo = '';
+        this.composeCc = '';
+        this.composeSubject = '';
+        this.composeBody = '';
+        this.isComposing = true;
+    }
+
+    replyToMessage() {
+        if (!this.selectedMessage) return;
+        this.composeMode = 'reply';
+        this.composeTo = this.selectedMessage.from;
+        this.composeCc = '';
+        this.composeSubject = this.selectedMessage.subject.startsWith('Re: ')
+            ? this.selectedMessage.subject
+            : 'Re: ' + this.selectedMessage.subject;
+        // Quote original body
+        this.composeBody = `<p><br></p><blockquote>${this.selectedMessage.body || this.selectedMessage.snippet}</blockquote>`;
+        this.isComposing = true;
+    }
+
+    replyAllToMessage() {
+        if (!this.selectedMessage) return;
+        this.composeMode = 'reply-all';
+        // For reply-all, To gets the sender, Cc gets other recipients (simplified: just use sender for now)
+        this.composeTo = this.selectedMessage.from;
+        this.composeCc = '';  // Would need full header parsing to extract CC recipients
+        this.composeSubject = this.selectedMessage.subject.startsWith('Re: ')
+            ? this.selectedMessage.subject
+            : 'Re: ' + this.selectedMessage.subject;
+        this.composeBody = `<p><br></p><blockquote>${this.selectedMessage.body || this.selectedMessage.snippet}</blockquote>`;
+        this.isComposing = true;
+    }
+
+    forwardMessage() {
+        if (!this.selectedMessage) return;
+        this.composeMode = 'forward';
+        this.composeTo = '';
+        this.composeCc = '';
+        this.composeSubject = 'Fwd: ' + this.selectedMessage.subject;
+        this.composeBody = `<p><br></p><blockquote>${this.selectedMessage.body || this.selectedMessage.snippet}</blockquote>`;
         this.isComposing = true;
     }
 
     cancelComposing() {
         this.isComposing = false;
+        this.composeMode = 'new';
+        this.composeTo = '';
+        this.composeCc = '';
+        this.composeSubject = '';
+        this.composeBody = '';
     }
 
     reset() {
@@ -289,6 +340,11 @@ class EmailStore {
         this.currentLabelId = null;
         this.labels = [];
         this.isComposing = false;
+        this.composeMode = 'new';
+        this.composeTo = '';
+        this.composeCc = '';
+        this.composeSubject = '';
+        this.composeBody = '';
     }
 
     async refresh() {

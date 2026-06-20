@@ -54,6 +54,26 @@ describe('api.safeInvoke', () => {
       expect.objectContaining({ accountId: 'user@test.com' })
     );
   });
+
+  it('sends null for optional cc/bcc when not provided', async () => {
+    const api = await import('$lib/api');
+    mockedInvoke.mockResolvedValueOnce(null);
+    await api.sendEmail('user@test.com', 'to@test.com', 'Subject', 'Body');
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      'send_email',
+      expect.objectContaining({ cc: null, bcc: null })
+    );
+  });
+
+  it('sends cc when provided', async () => {
+    const api = await import('$lib/api');
+    mockedInvoke.mockResolvedValueOnce(null);
+    await api.sendEmail('user@test.com', 'to@test.com', 'Subject', 'Body', 'cc@test.com');
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      'send_email',
+      expect.objectContaining({ cc: 'cc@test.com' })
+    );
+  });
 });
 
 describe('api.getAccounts', () => {

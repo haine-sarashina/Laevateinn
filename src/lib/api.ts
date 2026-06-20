@@ -142,8 +142,17 @@ export async function sendEmail(
     to: string,
     subject: string,
     body: string,
+    cc?: string,
+    bcc?: string,
 ): Promise<void> {
-    return await safeInvoke<void>('send_email', { accountId, to, subject, body });
+    return await safeInvoke<void>('send_email', {
+        accountId,
+        to,
+        subject,
+        body,
+        cc: cc || null,
+        bcc: bcc || null,
+    });
 }
 
 /**
