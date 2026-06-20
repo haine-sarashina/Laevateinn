@@ -136,3 +136,83 @@ describe('api.log', () => {
     );
   });
 });
+
+describe('api.modifyLabels', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('invokes modify_labels with add labels for starring', async () => {
+    const api = await import('$lib/api');
+    mockedInvoke.mockResolvedValueOnce({ success: true, messageId: 'msg123' });
+    const result = await api.modifyLabels('user@test.com', 'msg123', ['LABEL_STARRED'], []);
+    expect(result).toEqual({ success: true, messageId: 'msg123' });
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      'modify_labels',
+      expect.objectContaining({
+        accountId: 'user@test.com',
+        messageId: 'msg123',
+        addLabelIds: ['LABEL_STARRED'],
+        removeLabelIds: [],
+      })
+    );
+  });
+
+  it('invokes modify_labels with remove labels for un-starring', async () => {
+    const api = await import('$lib/api');
+    mockedInvoke.mockResolvedValueOnce({ success: true, messageId: 'msg456' });
+    const result = await api.modifyLabels('user@test.com', 'msg456', [], ['LABEL_STARRED']);
+    expect(result).toEqual({ success: true, messageId: 'msg456' });
+  });
+
+  it('invokes modify_labels for archive (remove INBOX)', async () => {
+    const api = await import('$lib/api');
+    mockedInvoke.mockResolvedValueOnce({ success: true, messageId: 'msg789' });
+    await api.modifyLabels('user@test.com', 'msg789', [], ['LABEL_INBOX']);
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      'modify_labels',
+      expect.objectContaining({ removeLabelIds: ['LABEL_INBOX'] })
+    );
+  });
+
+  it('invokes modify_labels for trash (add TRASH, remove INBOX)', async () => {
+    const api = await import('$lib/api');
+    mockedInvoke.mockResolvedValueOnce({ success: true, messageId: 'msgTrash' });
+    await api.modifyLabels('user@test.com', 'msgTrash', ['LABEL_TRASH'], ['LABEL_INBOX']);
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      'modify_labels',
+      expect.objectContaining({
+        addLabelIds: ['LABEL_TRASH'],
+        removeLabelIds: ['LABEL_INBOX'],
+      })
+    );
+  });
+
+  it('invokes modify_labels for spam report', async () => {
+    const api = await import('$lib/api');
+    mockedInvoke.mockResolvedValueOnce({ success: true, messageId: 'msgSpam' });
+    await api.modifyLabels('user@test.com', 'msgSpam', ['LABEL_SPAM'], ['LABEL_INBOX']);
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      'modify_labels',
+      expect.objectContaining({ addLabelIds: ['LABEL_SPAM'] })
+    );
+  });
+
+  it('sends empty arrays when optional params omitted', async () => {
+    const api = await import('$lib/api');
+    mockedInvoke.mockResolvedValueOnce({ success: true, messageId: 'msg123' });
+    await api.modifyLabels('user@test.com', 'msg123');
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      'modify_labels',
+      expect.objectContaining({ addLabelIds: [], removeLabelIds: [] })
+    );
+  });
+
+  it('propagates errors from backend', async () => {
+    const api = await import('$lib/api');
+    mockedInvoke
+      .mockRejectedValueOnce(new Error('API error'))
+      .mockRejectedValueOnce(new Error('API error'));
+    await expect(
+      api.modifyLabels('user@test.com', 'msg123', ['LABEL_STARRED'], [])
+    ).rejects.toThrow('API error');
+  });
+});

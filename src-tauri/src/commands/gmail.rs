@@ -679,6 +679,28 @@ pub struct SendEmailArgs {
     pub body: String,
 }
 
+/// 引数構造体: Gmail API messages.modifyLabels
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModifyLabelsArgs {
+    pub account_id: String,
+    pub message_id: String,
+    /// 追加するラベルIDリスト (LABEL_STARRED, LABEL_IMPORTANT など)
+    #[serde(default)]
+    pub add_label_ids: Vec<String>,
+    /// 削除するラベルIDリスト (LABEL_INBOX, LABEL_TRASH など)
+    #[serde(default)]
+    pub remove_label_ids: Vec<String>,
+}
+
+/// レスポンス: modifyLabels の結果 (空だが成功を示す)
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModifyLabelsResponse {
+    pub success: bool,
+    pub message_id: String,
+}
+
 #[tauri::command]
 pub async fn send_email(
     app: tauri::AppHandle,
@@ -745,6 +767,75 @@ pub async fn send_email(
 
     println!("[gmail] email sent successfully for {}", account_id);
     Ok(())
+}
+
+/// Gmail API messages.modifyLabels を呼び出してラベルの追加/削除を行う。
+/// スター切替、アーカイブ、ゴミ箱移動、スパム報告など、すべてこの1つのコマンドで実現する。
+#[tauri::command]
+pub async fn modify_labels(
+    app: tauri::AppHandle,
+    account_id: String,
+    message_id: String,
+    add_label_ids: Vec<String>,
+    remove_label_ids: Vec<String>,
+) -> Result<ModifyLabelsResponse, AppError> {
+    let client = Client::new();
+    let url = format!(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}/modifyLabels",
+        message_id
+    );
+
+    // keyringからアクセストークンを直接取得
+    let token = get_access_token_for(&account_id)?
+        .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))?;
+
+    let payload = serde_json::json!({
+        "addLabelIds": if add_label_ids.is_empty() { serde_json::Value::Null } else { serde_json::json!(add_label_ids) },
+        "removeLabelIds": if remove_label_ids.is_empty() { serde_json::Value::Null } else { serde_json::json!(remove_label_ids) },
+    });
+
+    // ログ出力: 何を行うか可視化する
+    println!("[gmail] modify_labels: message_id={}, add={:?}, remove={:?}", message_id, add_label_ids, remove_label_ids);
+
+    let mut response = client
+        .post(&url)
+        .bearer_auth(&token)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(AppError::from)?;
+
+    // レスポンスが401の場合: トークンをリフレッシュして自動リトライ
+    if response.status() == 401 {
+        println!("[gmail] modify_labels: 401 received, refreshing token for {}", account_id);
+        let new_token = refresh_access_token_for(&account_id).await?;
+        let _ = app.emit("token-refreshed", &account_id);
+        response = client
+            .post(&url)
+            .bearer_auth(&new_token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(AppError::from)?;
+        if response.status() == 401 {
+            let error_text = response.text().await.map_err(AppError::from)?;
+            return Err(AppError::AuthError(format!(
+                "認証が無効です。アカウントを再設定してください。Gmail: {}",
+                error_text
+            )));
+        }
+    }
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.map_err(AppError::from)?;
+        return Err(AppError::ApiError(format!("Gmail API modifyLabels error: {}", error_text)));
+    }
+
+    println!("[gmail] modify_labels: success for message_id={}", message_id);
+    Ok(ModifyLabelsResponse {
+        success: true,
+        message_id,
+    })
 }
 
 #[cfg(test)]
@@ -973,5 +1064,119 @@ mod tests {
         extract_headers_recursive(&payload, &mut subj, &mut from, &mut String::new());
         assert_eq!(subj, "Outer Subject"); // outer takes precedence
         assert_eq!(from, "Deep Sender <deep@test.com>");
+    }
+
+    // --- ModifyLabelsArgs serialization tests ---
+    #[test]
+    fn modify_labels_args_serializes_star_add() {
+        let args = ModifyLabelsArgs {
+            account_id: "user@test.com".to_string(),
+            message_id: "msg123".to_string(),
+            add_label_ids: vec!["LABEL_STARRED".to_string()],
+            remove_label_ids: vec![],
+        };
+        let json = serde_json::to_value(&args).unwrap();
+        assert_eq!(json["accountId"], "user@test.com");
+        assert_eq!(json["messageId"], "msg123");
+        assert_eq!(json["addLabelIds"], serde_json::json!([ "LABEL_STARRED"]));
+        assert!(json["removeLabelIds"].is_array());
+        assert_eq!(json["removeLabelIds"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn modify_labels_args_serializes_star_remove() {
+        let args = ModifyLabelsArgs {
+            account_id: "user@test.com".to_string(),
+            message_id: "msg456".to_string(),
+            add_label_ids: vec![],
+            remove_label_ids: vec!["LABEL_STARRED".to_string()],
+        };
+        let json = serde_json::to_value(&args).unwrap();
+        assert!(json["addLabelIds"].as_array().unwrap().is_empty());
+        assert_eq!(json["removeLabelIds"], serde_json::json!([ "LABEL_STARRED"]));
+    }
+
+    #[test]
+    fn modify_labels_args_serializes_archive() {
+        let args = ModifyLabelsArgs {
+            account_id: "user@test.com".to_string(),
+            message_id: "msg789".to_string(),
+            add_label_ids: vec![],
+            remove_label_ids: vec!["LABEL_INBOX".to_string()],
+        };
+        let json = serde_json::to_value(&args).unwrap();
+        assert_eq!(json["removeLabelIds"], serde_json::json!([ "LABEL_INBOX"]));
+    }
+
+    #[test]
+    fn modify_labels_args_serializes_trash() {
+        let args = ModifyLabelsArgs {
+            account_id: "user@test.com".to_string(),
+            message_id: "msgTrash".to_string(),
+            add_label_ids: vec!["LABEL_TRASH".to_string()],
+            remove_label_ids: vec!["LABEL_INBOX".to_string()],
+        };
+        let json = serde_json::to_value(&args).unwrap();
+        assert_eq!(json["addLabelIds"], serde_json::json!([ "LABEL_TRASH"]));
+        assert_eq!(json["removeLabelIds"], serde_json::json!([ "LABEL_INBOX"]));
+    }
+
+    #[test]
+    fn modify_labels_args_serializes_spam() {
+        let args = ModifyLabelsArgs {
+            account_id: "user@test.com".to_string(),
+            message_id: "msgSpam".to_string(),
+            add_label_ids: vec!["LABEL_SPAM".to_string()],
+            remove_label_ids: vec!["LABEL_INBOX".to_string()],
+        };
+        let json = serde_json::to_value(&args).unwrap();
+        assert_eq!(json["addLabelIds"], serde_json::json!([ "LABEL_SPAM"]));
+    }
+
+    #[test]
+    fn modify_labels_args_default_is_empty() {
+        let args = ModifyLabelsArgs::default();
+        assert!(args.account_id.is_empty());
+        assert!(args.message_id.is_empty());
+        assert!(args.add_label_ids.is_empty());
+        assert!(args.remove_label_ids.is_empty());
+    }
+
+    #[test]
+    fn modify_labels_args_multiple_add_labels() {
+        let args = ModifyLabelsArgs {
+            account_id: "user@test.com".to_string(),
+            message_id: "msgMulti".to_string(),
+            add_label_ids: vec!["LABEL_STARRED".to_string(), "LABEL_IMPORTANT".to_string()],
+            remove_label_ids: vec![],
+        };
+        let json = serde_json::to_value(&args).unwrap();
+        let add_arr = json["addLabelIds"].as_array().unwrap();
+        assert_eq!(add_arr.len(), 2);
+        assert_eq!(add_arr[0], "LABEL_STARRED");
+        assert_eq!(add_arr[1], "LABEL_IMPORTANT");
+    }
+
+    // --- ModifyLabelsResponse serialization tests ---
+    #[test]
+    fn modify_labels_response_serializes() {
+        let resp = ModifyLabelsResponse {
+            success: true,
+            message_id: "msg123".to_string(),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["messageId"], "msg123");
+    }
+
+    #[test]
+    fn modify_labels_response_serializes_with_camel_case() {
+        let resp = ModifyLabelsResponse {
+            success: true,
+            message_id: "abc".to_string(),
+        };
+        let json_str = serde_json::to_string(&resp).unwrap();
+        assert!(json_str.contains("success"));
+        assert!(json_str.contains("messageId"));
     }
 }

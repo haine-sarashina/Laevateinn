@@ -39,21 +39,31 @@
 <div class="email-list-view">
     <div class="message-list">
         {#each emailStore.messages as message (message.id)}
-            <button
-                class="message-item"
-                class:read={message.read}
-                class:active={emailStore.selectedMessage?.id === message.id}
-                onclick={() => emailStore.loadMessageDetail(message.id)}
-            >
-                <div class="message-header">
-                    <span class="sender">{truncate(formatSender(message.from), 25)}</span>
-                    <span class="date">{formatDate(message.date)}</span>
-                </div>
-                <div class="message-subject">{message.subject || 'No Subject'}</div>
-                <div class="message-snippet">
-                    {message.snippet ? truncate(message.snippet, 80) : 'No preview available'}
-                </div>
-            </button>
+            <div class="message-row">
+                <button
+                    class="message-item"
+                    class:read={message.read}
+                    class:active={emailStore.selectedMessage?.id === message.id}
+                    onclick={() => emailStore.loadMessageDetail(message.id)}
+                >
+                    <div class="message-header">
+                        <span class="sender">{truncate(formatSender(message.from), 25)}</span>
+                        <span class="date">{formatDate(message.date)}</span>
+                    </div>
+                    <div class="message-subject">{message.subject || 'No Subject'}</div>
+                    <div class="message-snippet">
+                        {message.snippet ? truncate(message.snippet, 80) : 'No preview available'}
+                    </div>
+                </button>
+                <button
+                    class="star-btn"
+                    class:starred={message.starred}
+                    title={message.starred ? "Unstar" : "Star"}
+                    onclick={(e) => { e.stopPropagation(); emailStore.toggleStar(message.id); }}
+                >
+                    {message.starred ? '★' : '☆'}
+                </button>
+            </div>
         {/each}
     </div>
 
@@ -225,5 +235,37 @@
 
     @keyframes spin {
         to { transform: rotate(360deg); }
+    }
+
+    .message-row {
+        display: flex;
+        align-items: stretch;
+    }
+
+    .message-row .message-item {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .star-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 0.75rem;
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 1.25rem;
+        color: #4b5563;
+        transition: all 0.15s ease;
+        flex-shrink: 0;
+    }
+
+    .star-btn:hover {
+        color: #fbbf24;
+    }
+
+    .star-btn.starred {
+        color: #fbbf24;
     }
 </style>

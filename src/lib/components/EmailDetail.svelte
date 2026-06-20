@@ -35,6 +35,36 @@
             <button class="back-btn" onclick={() => emailStore.clearSelectedMessage()}>
                 ← Back to List
             </button>
+            <div class="action-buttons">
+                <button
+                    class="action-btn star-action"
+                    title={emailStore.getMessage(emailStore.selectedMessage.id)?.starred ? "Unstar" : "Star"}
+                    onclick={() => emailStore.toggleStar(emailStore.selectedMessage.id)}
+                >
+                    {emailStore.getMessage(emailStore.selectedMessage.id)?.starred ? '★ Starred' : '☆ Star'}
+                </button>
+                <button
+                    class="action-btn archive-action"
+                    title="Archive"
+                    onclick={() => { emailStore.archiveMessage(emailStore.selectedMessage.id); }}
+                >
+                    📦 Archive
+                </button>
+                <button
+                    class="action-btn trash-action"
+                    title="Delete"
+                    onclick={() => { emailStore.trashMessage(emailStore.selectedMessage.id); }}
+                >
+                    🗑 Delete
+                </button>
+                <button
+                    class="action-btn spam-action"
+                    title="Report Spam"
+                    onclick={() => { emailStore.spamMessage(emailStore.selectedMessage.id); }}
+                >
+                    ⚠ Spam
+                </button>
+            </div>
         </div>
 
         <div class="detail-content" bind:this={scrollContainer}>
@@ -247,5 +277,52 @@
 
     @keyframes spin {
         to { transform: rotate(360deg); }
+    }
+
+    .action-buttons {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    .action-btn {
+        background: #1f2937;
+        border: 1px solid #374151;
+        color: #d1d5db;
+        cursor: pointer;
+        font-size: 0.8125rem;
+        font-family: inherit;
+        padding: 0.375rem 0.75rem;
+        border-radius: 6px;
+        transition: all 0.15s ease;
+        display: flex;
+        align-items: center;
+        gap: 0.375rem;
+    }
+
+    .action-btn:hover {
+        background-color: #374151;
+        border-color: #4b5563;
+    }
+
+    .star-action:hover {
+        color: #fbbf24;
+        border-color: #f59e0b;
+    }
+
+    .trash-action:hover {
+        color: #f87171;
+        border-color: #ef4444;
+    }
+
+    .spam-action:hover {
+        color: #fb923c;
+        border-color: #f97316;
+    }
+
+    .archive-action:hover {
+        color: #60a5fa;
+        border-color: #3b82f6;
     }
 </style>

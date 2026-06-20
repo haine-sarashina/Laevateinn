@@ -145,3 +145,26 @@ export async function sendEmail(
 ): Promise<void> {
     return await safeInvoke<void>('send_email', { accountId, to, subject, body });
 }
+
+/**
+ * Modifies labels on a message (add/remove).
+ * Used for star toggle, archive, trash, spam report, etc.
+ */
+export interface ModifyLabelsResult {
+    success: boolean;
+    messageId: string;
+}
+
+export async function modifyLabels(
+    accountId: string,
+    messageId: string,
+    addLabelIds?: string[],
+    removeLabelIds?: string[],
+): Promise<ModifyLabelsResult> {
+    return await safeInvoke<ModifyLabelsResult>('modify_labels', {
+        accountId,
+        messageId,
+        addLabelIds: addLabelIds || [],
+        removeLabelIds: removeLabelIds || [],
+    });
+}

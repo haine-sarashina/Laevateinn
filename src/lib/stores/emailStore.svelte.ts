@@ -1,5 +1,5 @@
-import { listMessages, getMessageDetails, listLabels } from "$lib/api";
-import type { GmailMessageDetail, GmailListResponse, GmailLabel, GmailLabelsResponse } from "$lib/api";
+import { listMessages, getMessageDetails, listLabels, modifyLabels } from "$lib/api";
+import type { GmailMessageDetail, GmailListResponse, GmailLabel, GmailLabelsResponse, ModifyLabelsResult } from "$lib/api";
 import { errorStore } from "./errorStore.svelte";
 import { authStore } from "./authStore.svelte";
 import { groupMessagesByThread } from "$lib/threads";
@@ -15,6 +15,7 @@ export interface EmailMessage {
     date: string;
     body: string;
     read: boolean;
+    starred: boolean;
 }
 
 export interface CacheInfo {
@@ -55,6 +56,7 @@ function toEmailMessage(m: { id: string; threadId: string; snippet: string; subj
         date: m.date,
         body: '',
         read: false,
+        starred: false,
     };
 }
 
@@ -343,6 +345,148 @@ class EmailStore {
      */
     getMessage(id: string): EmailMessage | undefined {
         return this._cache.get(id);
+    }
+
+    /**
+     * Toggles the star status of a message.
+     * Uses Gmail API messages.modifyLabels to add/remove LABEL_STARRED.
+     */
+    async toggleStar(messageId: string) {
+        try {
+            const accountId = authStore.activeAccountId;
+            if (!accountId) {
+                this.error = 'No active account selected.';
+                return;
+            }
+
+            // Check current starred state to decide add or remove
+            const cached = this._cache.get(messageId);
+            const isStarred = cached?.starred ?? false;
+
+            const result: ModifyLabelsResult = await modifyLabels(
+                accountId,
+                messageId,
+                isStarred ? [] : ["LABEL_STARRED"],     // add if not starred
+                isStarred ? ["LABEL_STARRED"] : [],       // remove if starred
+            );
+
+            if (result.success) {
+                // Update local state
+                const msg = this._cache.get(messageId);
+                if (msg) {
+                    msg.starred = !isStarred;
+                    this._cache.add(msg); // re-add to update access order
+                    this._syncMessages();
+                }
+            }
+        } catch (e) {
+            if (e instanceof Error) {
+                this.error = e.message;
+            } else if (typeof e === "object" && e !== null && "message" in e) {
+                this.error = String(e.message);
+            } else {
+                this.error = `Failed to toggle star: ${e}`;
+            }
+            this.isAuthErrorFlag = isAuthError(e);
+            if (!this.isAuthErrorFlag) {
+                errorStore.set(this.error);
+            }
+        }
+    }
+
+    /**
+     * Archives a message by removing LABEL_INBOX.
+     */
+    async archiveMessage(messageId: string) {
+        try {
+            const accountId = authStore.activeAccountId;
+            if (!accountId) {
+                this.error = 'No active account selected.';
+                return;
+            }
+
+            await modifyLabels(accountId, messageId, [], ["LABEL_INBOX"]);
+
+            // Remove from local cache
+            this._cache.delete(messageId);
+            this._syncMessages();
+        } catch (e) {
+            if (e instanceof Error) {
+                this.error = e.message;
+            } else if (typeof e === "object" && e !== null && "message" in e) {
+                this.error = String(e.message);
+            } else {
+                this.error = `Failed to archive message: ${e}`;
+            }
+            this.isAuthErrorFlag = isAuthError(e);
+            if (!this.isAuthErrorFlag) {
+                errorStore.set(this.error);
+            }
+        }
+    }
+
+    /**
+     * Moves a message to trash by adding LABEL_TRASH and removing LABEL_INBOX.
+     */
+    async trashMessage(messageId: string) {
+        try {
+            const accountId = authStore.activeAccountId;
+            if (!accountId) {
+                this.error = 'No active account selected.';
+                return;
+            }
+
+            await modifyLabels(accountId, messageId, ["LABEL_TRASH"], ["LABEL_INBOX"]);
+
+            // Remove from local cache
+            this._cache.delete(messageId);
+            this._syncMessages();
+            this.selectedMessage = null;
+        } catch (e) {
+            if (e instanceof Error) {
+                this.error = e.message;
+            } else if (typeof e === "object" && e !== null && "message" in e) {
+                this.error = String(e.message);
+            } else {
+                this.error = `Failed to trash message: ${e}`;
+            }
+            this.isAuthErrorFlag = isAuthError(e);
+            if (!this.isAuthErrorFlag) {
+                errorStore.set(this.error);
+            }
+        }
+    }
+
+    /**
+     * Reports a message as spam by adding LABEL_SPAM and removing LABEL_INBOX.
+     */
+    async spamMessage(messageId: string) {
+        try {
+            const accountId = authStore.activeAccountId;
+            if (!accountId) {
+                this.error = 'No active account selected.';
+                return;
+            }
+
+            await modifyLabels(accountId, messageId, ["LABEL_SPAM"], ["LABEL_INBOX"]);
+
+            // Remove from local cache
+            this._cache.delete(messageId);
+            this._syncMessages();
+            this.selectedMessage = null;
+        } catch (e) {
+            if (e instanceof Error) {
+                this.error = e.message;
+            } else if (typeof e === "object" && e !== null && "message" in e) {
+                this.error = String(e.message);
+            } else {
+                this.error = `Failed to report as spam: ${e}`;
+            }
+            this.isAuthErrorFlag = isAuthError(e);
+            if (!this.isAuthErrorFlag) {
+                errorStore.set(this.error);
+            }
+        }
     }
 }
 
