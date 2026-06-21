@@ -381,3 +381,219 @@ describe('AuthStore.getEmailStore()', async () => {
     expect(ref1).toBe(ref2);
   });
 });
+
+describe('AuthStore.onAccountChange() callbacks', () => {
+  beforeEach(() => {
+    mockedInvoke.mockReset();
+    mockedInvoke.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    mockedInvoke.mockRestore();
+  });
+
+  it('calls before callback with old and new account ids', async () => {
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+    authStore.activeAccountId = 'old@test.com';
+
+    const beforeCb = vi.fn();
+    authStore.onAccountChange({ before: beforeCb });
+
+    // Mock: switch_active_for_account -> get_accounts (for email refresh) -> list_labels -> list_messages
+    mockedInvoke.mockResolvedValueOnce(undefined); // switch
+    mockedInvoke.mockResolvedValueOnce([]);        // get_accounts
+    mockedInvoke.mockResolvedValueOnce({ labels: [] });  // list_labels
+    mockedInvoke.mockResolvedValueOnce({ messages: [], nextPageToken: null }); // list_messages
+
+    await authStore.setActiveAccount('new@test.com');
+
+    expect(beforeCb).toHaveBeenCalledWith('old@test.com', 'new@test.com');
+  });
+
+  it('calls after callback following a successful account switch', async () => {
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+    authStore.activeAccountId = 'old@test.com';
+
+    const afterCb = vi.fn();
+    authStore.onAccountChange({ after: afterCb });
+
+    mockedInvoke.mockResolvedValueOnce(undefined);
+    mockedInvoke.mockResolvedValueOnce([]);
+    mockedInvoke.mockResolvedValueOnce({ labels: [] });
+    mockedInvoke.mockResolvedValueOnce({ messages: [], nextPageToken: null });
+
+    await authStore.setActiveAccount('new@test.com');
+
+    expect(afterCb).toHaveBeenCalledWith('old@test.com', 'new@test.com');
+  });
+
+  it('unsubscribe removes the callback', async () => {
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+    authStore.activeAccountId = 'old@test.com';
+
+    const beforeCb = vi.fn();
+    const afterCb = vi.fn();
+    const unsubscribe = authStore.onAccountChange({ before: beforeCb, after: afterCb });
+    unsubscribe();
+
+    mockedInvoke.mockResolvedValueOnce(undefined);
+    mockedInvoke.mockResolvedValueOnce([]);
+    mockedInvoke.mockResolvedValueOnce({ labels: [] });
+    mockedInvoke.mockResolvedValueOnce({ messages: [], nextPageToken: null });
+
+    await authStore.setActiveAccount('new@test.com');
+
+    expect(beforeCb).not.toHaveBeenCalled();
+    expect(afterCb).not.toHaveBeenCalled();
+  });
+
+  it('before callback can be async', async () => {
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+    authStore.activeAccountId = 'old@test.com';
+
+    let resolved = false;
+    const beforeCb = vi.fn(async () => {
+      resolved = true;
+    });
+    authStore.onAccountChange({ before: beforeCb });
+
+    mockedInvoke.mockResolvedValueOnce(undefined);
+    mockedInvoke.mockResolvedValueOnce([]);
+    mockedInvoke.mockResolvedValueOnce({ labels: [] });
+    mockedInvoke.mockResolvedValueOnce({ messages: [], nextPageToken: null });
+
+    await authStore.setActiveAccount('new@test.com');
+
+    expect(resolved).toBe(true);
+  });
+
+  it('does not crash if after callback throws', async () => {
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+    authStore.activeAccountId = 'old@test.com';
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const badAfterCb = vi.fn(() => { throw new Error('after callback error'); });
+    const goodAfterCb = vi.fn();
+    authStore.onAccountChange({ after: badAfterCb });
+    authStore.onAccountChange({ after: goodAfterCb });
+
+    mockedInvoke.mockResolvedValueOnce(undefined);
+    mockedInvoke.mockResolvedValueOnce([]);
+    mockedInvoke.mockResolvedValueOnce({ labels: [] });
+    mockedInvoke.mockResolvedValueOnce({ messages: [], nextPageToken: null });
+
+    await authStore.setActiveAccount('new@test.com');
+
+    expect(badAfterCb).toHaveBeenCalled();
+    expect(goodAfterCb).toHaveBeenCalled();
+
+    consoleSpy.mockRestore();
+  });
+});
+
+describe('EmailStore compose state per account', () => {
+  beforeEach(() => {
+    mockedInvoke.mockReset();
+    mockedInvoke.mockResolvedValue(undefined);
+    // Reset emailStore to clear any leftover compose state from previous tests
+    (async () => {
+      const { emailStore } = await import('$lib/stores/emailStore.svelte');
+      emailStore.reset();
+    })();
+  });
+
+  afterEach(() => {
+    mockedInvoke.mockRestore();
+  });
+
+  it('saveComposeBeforeSwitch saves current compose state', async () => {
+    const { emailStore } = await import('$lib/stores/emailStore.svelte');
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+
+    authStore.activeAccountId = 'compose-test1@test.com';
+
+    // Set up compose state
+    emailStore.isComposing = true;
+    emailStore.composeMode = 'reply';
+    emailStore.composeTo = 'someone@example.com';
+    emailStore.composeCc = 'cc@example.com';
+    emailStore.composeSubject = 'Re: Test Subject';
+    emailStore.composeBody = 'Reply body content';
+
+    // Save the compose state
+    emailStore.saveComposeBeforeSwitch();
+
+    // Clear the current state (simulating reset during account switch)
+    emailStore.isComposing = false;
+    emailStore.composeTo = '';
+    emailStore.composeCc = '';
+    emailStore.composeSubject = '';
+    emailStore.composeBody = '';
+
+    // Restore should bring back the saved state
+    emailStore.restoreComposeAfterSwitch();
+
+    expect(emailStore.isComposing).toBe(true);
+    expect(emailStore.composeMode).toBe('reply');
+    expect(emailStore.composeTo).toBe('someone@example.com');
+    expect(emailStore.composeCc).toBe('cc@example.com');
+    expect(emailStore.composeSubject).toBe('Re: Test Subject');
+    expect(emailStore.composeBody).toBe('Reply body content');
+  });
+
+  it('does not restore compose state when none was saved', async () => {
+    const { emailStore } = await import('$lib/stores/emailStore.svelte');
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+
+    // Use a unique account that wasn't used in other tests
+    authStore.activeAccountId = 'compose-empty@test.com';
+
+    // No compose state set — just call restore directly
+    emailStore.restoreComposeAfterSwitch();
+
+    expect(emailStore.isComposing).toBe(false);
+  });
+
+  it('only restores state for the current account', async () => {
+    const { emailStore } = await import('$lib/stores/emailStore.svelte');
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+
+    // Save compose state for account1
+    authStore.activeAccountId = 'compose-a@test.com';
+    emailStore.isComposing = true;
+    emailStore.composeSubject = 'Account A draft';
+    emailStore.saveComposeBeforeSwitch();
+
+    // Switch to account2 and save different compose state
+    emailStore.reset();
+    authStore.activeAccountId = 'compose-b@test.com';
+    emailStore.isComposing = true;
+    emailStore.composeSubject = 'Account B draft';
+    emailStore.saveComposeBeforeSwitch();
+
+    // Now restore for account2 — should NOT show account1's draft
+    emailStore.reset();
+    authStore.activeAccountId = 'compose-b@test.com';
+    emailStore.restoreComposeAfterSwitch();
+
+    expect(emailStore.isComposing).toBe(true);
+    expect(emailStore.composeSubject).toBe('Account B draft');
+  });
+
+  it('does not save when not composing', async () => {
+    const { emailStore } = await import('$lib/stores/emailStore.svelte');
+    const { authStore } = await import('$lib/stores/authStore.svelte');
+
+    authStore.activeAccountId = 'compose-nosave@test.com';
+
+    // Not composing — nothing to save
+    emailStore.isComposing = false;
+    emailStore.saveComposeBeforeSwitch();
+
+    // Restore for same account — should remain not composing (nothing was saved)
+    emailStore.reset();
+    emailStore.restoreComposeAfterSwitch();
+
+    expect(emailStore.isComposing).toBe(false);
+  });
+});

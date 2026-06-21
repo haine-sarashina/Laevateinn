@@ -111,7 +111,10 @@
       "Bash(del *)",
       "Skill(boss-team)",
       "Bash(dir *)",
-      "Bash(Select-Object -First 80)"
+      "Bash(Select-Object -First 80)",
+      "Bash(pnpm test *)",
+      "Bash(cargo test *)",
+      "Bash(pnpm tsc *)"
     ]
   }
 }

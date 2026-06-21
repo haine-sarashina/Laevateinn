@@ -1,31 +1,16 @@
 <script lang="ts">
-    import { onMount } from "svelte";
     import { authStore } from "$lib/stores/authStore.svelte";
     import { emailStore } from "$lib/stores/emailStore.svelte";
     import EmailList from "$lib/components/EmailList.svelte";
     import EmailDetail from "$lib/components/EmailDetail.svelte";
     import ComposeEmail from "$lib/components/ComposeEmail.svelte";
-    import Toast from "$lib/components/ui/Toast.svelte";
     import { safeInvoke } from "$lib/api";
     import { openUrl } from "@tauri-apps/plugin-opener";
 
+    // Initialization is handled by +layout.svelte onMount.
+    // This component only renders the mail UI; no duplicate API calls needed.
+
     let showContent = $derived(authStore.accounts.length > 0);
-
-    async function handleGoogleLogin() {
-        try {
-            const result = await safeInvoke<{ auth_url: string; state: string }>("start_auth_flow");
-            await openUrl(result.auth_url);
-        } catch (e) {
-            emailStore.error = "Auth error: " + e;
-        }
-    }
-
-    onMount(async () => {
-        await authStore.initialize();
-        if (authStore.accounts.length > 0) {
-            await emailStore.refresh();
-        }
-    });
 </script>
 
 <div class="main-content">
@@ -33,7 +18,14 @@
         <div class="empty-inbox">
             <h2>No Accounts</h2>
             <p>Add an email account to get started.</p>
-            <button class="add-account-btn" onclick={handleGoogleLogin}>
+            <button class="add-account-btn" onclick={async () => {
+                try {
+                    const result = await safeInvoke<{ auth_url: string; state: string }>("start_auth_flow");
+                    await openUrl(result.auth_url);
+                } catch (e) {
+                    emailStore.error = "Auth error: " + e;
+                }
+            }}>
                 Add Google Account
             </button>
         </div>
@@ -82,8 +74,6 @@
         </div>
     {/if}
 </div>
-
-<Toast />
 
 <style>
     .main-content {

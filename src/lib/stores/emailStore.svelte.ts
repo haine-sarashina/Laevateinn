@@ -60,6 +60,15 @@ function toEmailMessage(m: { id: string; threadId: string; snippet: string; subj
     };
 }
 
+/** Compose state saved per account to survive account switches. */
+interface SavedComposeState {
+    mode: 'new' | 'reply' | 'reply-all' | 'forward';
+    to: string;
+    cc: string;
+    subject: string;
+    body: string;
+}
+
 class EmailStore {
     // LRU-backed message cache with configurable capacity
     private _cache = new LRUMessageCache(DEFAULT_CACHE_CAPACITY);
@@ -95,6 +104,49 @@ class EmailStore {
     // Label support
     labels = $state<GmailLabel[]>([]);
     currentLabelId = $state<string | null>(null);
+
+    /** Compose state saved per account ID to survive account switches. */
+    #composeStatePerAccount = new Map<string, SavedComposeState>();
+
+    /** Register with authStore to save/restore compose state on account switch. */
+    #saveComposeBeforeSwitch(): void {
+        const accountId = authStore.activeAccountId;
+        if (accountId && this.isComposing) {
+            this.#composeStatePerAccount.set(accountId, {
+                mode: this.composeMode,
+                to: this.composeTo,
+                cc: this.composeCc,
+                subject: this.composeSubject,
+                body: this.composeBody,
+            });
+        }
+    }
+
+    /** Restore compose state for the current account after refresh completes. */
+    #restoreComposeAfterSwitch(): void {
+        const accountId = authStore.activeAccountId;
+        if (accountId) {
+            const saved = this.#composeStatePerAccount.get(accountId);
+            if (saved) {
+                this.composeMode = saved.mode;
+                this.composeTo = saved.to;
+                this.composeCc = saved.cc;
+                this.composeSubject = saved.subject;
+                this.composeBody = saved.body;
+                this.isComposing = true;
+            }
+        }
+    }
+
+    /** Public: Save current compose state for the active account. */
+    saveComposeBeforeSwitch(): void {
+        this.#saveComposeBeforeSwitch();
+    }
+
+    /** Public: Restore compose state for the current account. */
+    restoreComposeAfterSwitch(): void {
+        this.#restoreComposeAfterSwitch();
+    }
 
     /**
      * Synchronize the reactive messages array from the internal LRU cache.

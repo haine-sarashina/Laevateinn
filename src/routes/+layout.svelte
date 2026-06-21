@@ -90,16 +90,14 @@
             }
             hasRefreshed = true;
             try {
-                const accounts = await authStore.getAccounts();
-                console.log('[oauth] accounts loaded:', accounts);
-                authStore.accounts = accounts;
-                if (accounts.length > 0) {
-                    authStore.activeAccountId = accounts[0].id;
-                    await safeInvoke('switch_active_for_account', { id: accounts[0].id });
+                // Use authStore.syncAccounts() to reload account list from backend
+                await authStore.syncAccounts();
+                console.log('[oauth] accounts synced:', authStore.accounts);
+                if (authStore.accounts.length > 0) {
+                    // setActiveAccount handles backend switch + email refresh in one call
+                    await authStore.setActiveAccount(authStore.accounts[0].id);
+                    console.log('[oauth] switched to account:', authStore.accounts[0].id);
                 }
-                const { emailStore: email } = await import("$lib/stores/emailStore.svelte");
-                await email.refresh();
-                console.log('[oauth] email list refreshed');
             } catch (e) {
                 console.error("Failed to handle oauth-account-added", e);
             }
@@ -130,6 +128,19 @@
             if (authStore.activeAccountId === accountId) {
                 emailStore.refresh();
             }
+        });
+
+        // Register compose state save/restore for account switching.
+        // Before switch: save current compose draft for the old account.
+        // After switch: restore compose draft for the new account.
+        const unlistenAccountChange = authStore.onAccountChange({
+            before: () => emailStore.saveComposeBeforeSwitch(),
+            after: () => emailStore.restoreComposeAfterSwitch(),
+        });
+
+        // Clean up on destroy
+        onDestroy(() => {
+            unlistenAccountChange();
         });
 
         appReady = true;
