@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "lowercase")]

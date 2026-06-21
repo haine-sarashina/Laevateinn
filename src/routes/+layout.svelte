@@ -8,6 +8,7 @@
     import { listen } from "@tauri-apps/api/event";
     import { safeInvoke } from "$lib/api";
     import { errorStore } from "$lib/stores/errorStore.svelte";
+    import { useShortcuts } from "$lib/keyboardShortcuts";
 
     let { children } = $props();
     let hasRefreshed = $state(false);
@@ -20,6 +21,8 @@
     let unlistenOAuthError: any = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let unlistenTokenRefreshed: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let unlistenShortcuts: any = null;
 
     let showTimeout = setTimeout(async () => {
         windowReady = true;
@@ -143,6 +146,9 @@
             unlistenAccountChange();
         });
 
+        // Register keyboard shortcuts (Gmail-compatible keymap)
+        unlistenShortcuts = useShortcuts(emailStore, authStore);
+
         appReady = true;
 
         // Restore window position, size, and maximized state
@@ -159,6 +165,7 @@
         if (unlistenOAuthAdded) unlistenOAuthAdded();
         if (unlistenOAuthError) unlistenOAuthError();
         if (unlistenTokenRefreshed) unlistenTokenRefreshed();
+        if (unlistenShortcuts) unlistenShortcuts();
     });
 </script>
 

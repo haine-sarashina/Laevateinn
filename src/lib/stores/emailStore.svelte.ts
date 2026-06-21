@@ -96,6 +96,9 @@ class EmailStore {
 
     // Compose state
     isComposing = $state(false);
+
+    // Keyboard navigation cursor (index into messages array)
+    listCursorIndex = $state<number>(-1);
     composeMode = $state<'new' | 'reply' | 'reply-all' | 'forward'>('new');
     composeTo = $state<string>('');
     composeCc = $state<string>('');
@@ -397,6 +400,7 @@ class EmailStore {
         this.expandedThreads = new Set();
         this.currentLabelId = null;
         this.labels = [];
+        this.listCursorIndex = -1;
         this.isComposing = false;
         this.composeMode = 'new';
         this.composeTo = '';
@@ -453,6 +457,48 @@ class EmailStore {
      */
     getCacheInfo(): CacheInfo {
         return this._cache.stats();
+    }
+
+    /**
+     * Move the keyboard navigation cursor down one position in the message list.
+     * Clamped to the bounds of the messages array.
+     */
+    moveCursorDown(): void {
+        const max = this.messages.length - 1;
+        if (max < 0) {
+            this.listCursorIndex = -1;
+            return;
+        }
+        this.listCursorIndex = Math.min(this.listCursorIndex + 1, max);
+    }
+
+    /**
+     * Move the keyboard navigation cursor up one position in the message list.
+     * Clamped to zero (top of list).
+     */
+    moveCursorUp(): void {
+        if (this.messages.length === 0) {
+            this.listCursorIndex = -1;
+            return;
+        }
+        this.listCursorIndex = Math.max(this.listCursorIndex - 1, 0);
+    }
+
+    /**
+     * Open the message at the cursor position via loadMessageDetail.
+     * No-op if the cursor is invalid.
+     */
+    openCursorMessage(): void {
+        if (this.listCursorIndex < 0 || this.listCursorIndex >= this.messages.length) return;
+        const msg = this.messages[this.listCursorIndex];
+        if (msg) this.loadMessageDetail(msg.id);
+    }
+
+    /**
+     * Reset the cursor when the message list is cleared (e.g., refresh).
+     */
+    resetCursor(): void {
+        this.listCursorIndex = -1;
     }
 
     /**

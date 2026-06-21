@@ -1,9 +1,9 @@
-use rand::Rng;
-use serde::{Deserialize, Serialize};
 use crate::commands::auth::get_access_token_for;
 use crate::commands::auth::refresh_access_token_for;
 use crate::error::AppError;
+use rand::Rng;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
 #[derive(Debug, Serialize, Default)]
@@ -87,8 +87,9 @@ pub async fn list_labels(
     account_id: String,
 ) -> Result<ListLabelsResponse, AppError> {
     // keyringからアクセストークンを直接取得（事前tokeninfoチェックは行わない）
-    let token = get_access_token_for(&account_id)?
-        .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))?;
+    let token = get_access_token_for(&account_id)?.ok_or_else(|| {
+        AppError::AuthError("No access token found. Please login first.".to_string())
+    })?;
 
     let client = Client::new();
     let url = "https://gmail.googleapis.com/gmail/v1/users/me/labels";
@@ -101,7 +102,10 @@ pub async fn list_labels(
 
     // レスポンスが401の場合: トークンをリフレッシュして自動リトライ
     if response.status() == 401 {
-        println!("[gmail] list_labels: 401 received, refreshing token for {}", account_id);
+        println!(
+            "[gmail] list_labels: 401 received, refreshing token for {}",
+            account_id
+        );
         let new_token = refresh_access_token_for(&account_id).await?;
         // 新しいトークンは keyring に再保存済み（refresh_access_token_for 内で保存される）
         let _ = app.emit("token-refreshed", &account_id);
@@ -123,28 +127,42 @@ pub async fn list_labels(
 
     if !response.status().is_success() {
         let error_text = response.text().await.map_err(AppError::from)?;
-        return Err(AppError::ApiError(format!("Gmail API error: {}", error_text)));
+        return Err(AppError::ApiError(format!(
+            "Gmail API error: {}",
+            error_text
+        )));
     }
 
     let json: serde_json::Value = response.json().await.map_err(AppError::from)?;
 
-    let labels: Vec<GmailLabel> = json.get("labels")
+    let labels: Vec<GmailLabel> = json
+        .get("labels")
         .and_then(|l| l.as_array())
         .map(|arr| {
-            arr.iter().filter_map(|l| {
-                let raw_name = l.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
-                let display_name = l.get("displayName")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or(&raw_name)
-                    .to_string();
-                Some(GmailLabel {
-                    id: l.get("id")?.as_str()?.to_string(),
-                    name: raw_name,
-                    display_name,
-                    label_type: l.get("type")?.as_str()?.to_string(),
-                    messages_unread: l.get("messagesUnread").and_then(|v| v.as_u64()).unwrap_or(0),
+            arr.iter()
+                .filter_map(|l| {
+                    let raw_name = l
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let display_name = l
+                        .get("displayName")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or(&raw_name)
+                        .to_string();
+                    Some(GmailLabel {
+                        id: l.get("id")?.as_str()?.to_string(),
+                        name: raw_name,
+                        display_name,
+                        label_type: l.get("type")?.as_str()?.to_string(),
+                        messages_unread: l
+                            .get("messagesUnread")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
+                    })
                 })
-            }).collect()
+                .collect()
         })
         .unwrap_or_default();
 
@@ -156,8 +174,7 @@ pub async fn list_labels(
 // 代わりに、各Gmail APIコマンドでアクセストークンを直接keyringから取得し、
 // レスポンスが401の場合にのみトークンリフレッシュ + リトライする方式に変更した。
 fn is_url_char(c: char) -> bool {
-    c.is_alphanumeric()
-        || "-._~:/?#[]@!$&'()*+,=%".contains(c)
+    c.is_alphanumeric() || "-._~:/?#[]@!$&'()*+,=%".contains(c)
 }
 
 /// Measure byte length of valid URL characters starting from the beginning of `s`
@@ -165,7 +182,9 @@ fn valid_url_len(s: &str) -> usize {
     let bytes = s.as_bytes();
     let mut len = 0;
     while len < bytes.len() {
-        if !s[..len].is_char_boundary(len) { return len; }
+        if !s[..len].is_char_boundary(len) {
+            return len;
+        }
         let ch = s[len..].chars().next();
         match ch {
             Some(c) if is_url_char(c) => len += c.len_utf8(),
@@ -281,11 +300,7 @@ async fn fetch_message_meta(
         msg_id
     );
 
-    let response = client
-        .get(&url)
-        .bearer_auth(token)
-        .send()
-        .await;
+    let response = client.get(&url).bearer_auth(token).send().await;
 
     let response = match response {
         Ok(r) => r,
@@ -296,7 +311,11 @@ async fn fetch_message_meta(
     };
 
     if !response.status().is_success() {
-        println!("[gmail] fetch_meta {} status: {}", msg_id, response.status());
+        println!(
+            "[gmail] fetch_meta {} status: {}",
+            msg_id,
+            response.status()
+        );
         return None;
     }
 
@@ -311,21 +330,42 @@ async fn fetch_message_meta(
     // Debug: log all header names, and Subject/From/Date full values
     if let Some(payload) = json.get("payload") {
         if let Some(headers) = payload.get("headers").and_then(|h| h.as_array()) {
-            println!("[gmail] fetch_meta {} headers count: {}", msg_id, headers.len());
+            println!(
+                "[gmail] fetch_meta {} headers count: {}",
+                msg_id,
+                headers.len()
+            );
             let mut has_subject = false;
             let mut has_from = false;
             let mut has_date = false;
             for h in headers.iter() {
-                if let (Some(name), Some(value)) = (h.get("name").and_then(|n| n.as_str()), h.get("value").and_then(|v| v.as_str())) {
+                if let (Some(name), Some(value)) = (
+                    h.get("name").and_then(|n| n.as_str()),
+                    h.get("value").and_then(|v| v.as_str()),
+                ) {
                     match name {
-                        "Subject" => { has_subject = true; println!("  [Subject] = {}", value); }
-                        "From" => { has_from = true; println!("  [From] = {}", value); }
-                        "Date" => { has_date = true; println!("  [Date] = {}", value); }
-                        _ => { println!("  [{}]", name); }
+                        "Subject" => {
+                            has_subject = true;
+                            println!("  [Subject] = {}", value);
+                        }
+                        "From" => {
+                            has_from = true;
+                            println!("  [From] = {}", value);
+                        }
+                        "Date" => {
+                            has_date = true;
+                            println!("  [Date] = {}", value);
+                        }
+                        _ => {
+                            println!("  [{}]", name);
+                        }
                     }
                 }
             }
-            println!("[gmail] fetch_meta {} S={} F={} D={}", msg_id, has_subject, has_from, has_date);
+            println!(
+                "[gmail] fetch_meta {} S={} F={} D={}",
+                msg_id, has_subject, has_from, has_date
+            );
         } else {
             println!("[gmail] fetch_meta {} NO headers in payload", msg_id);
         }
@@ -334,9 +374,17 @@ async fn fetch_message_meta(
             println!("[gmail] fetch_meta {} parts count: {}", msg_id, parts.len());
             for (i, part) in parts.iter().enumerate() {
                 if let Some(headers) = part.get("headers").and_then(|h| h.as_array()) {
-                    println!("[gmail] fetch_meta {} part[{}] has {} headers", msg_id, i, headers.len());
+                    println!(
+                        "[gmail] fetch_meta {} part[{}] has {} headers",
+                        msg_id,
+                        i,
+                        headers.len()
+                    );
                     for h in headers.iter() {
-                        if let (Some(name), Some(value)) = (h.get("name").and_then(|n| n.as_str()), h.get("value").and_then(|v| v.as_str())) {
+                        if let (Some(name), Some(value)) = (
+                            h.get("name").and_then(|n| n.as_str()),
+                            h.get("value").and_then(|v| v.as_str()),
+                        ) {
                             match name {
                                 "Subject" => println!("  [part[{}] Subject] = {}", i, value),
                                 "From" => println!("  [part[{}] From] = {}", i, value),
@@ -359,7 +407,10 @@ async fn fetch_message_meta(
         extract_headers_recursive(payload, &mut subject, &mut from, &mut date);
     }
 
-    println!("[gmail] fetch_meta {} result: subject='{}' from='{}' date='{}'", msg_id, subject, from, date);
+    println!(
+        "[gmail] fetch_meta {} result: subject='{}' from='{}' date='{}'",
+        msg_id, subject, from, date
+    );
 
     Some((subject, from, date, snippet))
 }
@@ -373,11 +424,15 @@ pub async fn list_messages(
     label_id: Option<String>,
 ) -> Result<ListMessagesResponse, AppError> {
     let max_results = max_results.unwrap_or(20);
-    println!("[gmail] list_messages: account_id={}, page_token={:?}, max_results={}, label_id={:?}", account_id, page_token, max_results, label_id);
+    println!(
+        "[gmail] list_messages: account_id={}, page_token={:?}, max_results={}, label_id={:?}",
+        account_id, page_token, max_results, label_id
+    );
 
     // keyringからアクセストークンを直接取得（事前tokeninfoチェックは行わない）
-    let token = get_access_token_for(&account_id)?
-        .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))?;
+    let token = get_access_token_for(&account_id)?.ok_or_else(|| {
+        AppError::AuthError("No access token found. Please login first.".to_string())
+    })?;
 
     let client = Client::new();
 
@@ -401,40 +456,58 @@ pub async fn list_messages(
         request.send()
     };
 
-    let mut response = do_list_request(&token, page_token.as_deref(), label_id.as_deref()).await.map_err(AppError::from)?;
+    let mut response = do_list_request(&token, page_token.as_deref(), label_id.as_deref())
+        .await
+        .map_err(AppError::from)?;
 
     // レスポンスが401の場合: トークンをリフレッシュして自動リトライ
     if response.status() == 401 {
-        println!("[gmail] list_messages: 401 received, refreshing token for {}", account_id);
+        println!(
+            "[gmail] list_messages: 401 received, refreshing token for {}",
+            account_id
+        );
         let new_token = refresh_access_token_for(&account_id).await?;
         // 新しいトークンは keyring に再保存済み（refresh_access_token_for 内で保存される）
         let _ = app.emit("token-refreshed", &account_id);
-        response = do_list_request(&new_token, page_token.as_deref(), label_id.as_deref()).await.map_err(AppError::from)?;
+        response = do_list_request(&new_token, page_token.as_deref(), label_id.as_deref())
+            .await
+            .map_err(AppError::from)?;
         if response.status() == 401 {
             // リトライ後も401の場合: クレデンシャルが無効である可能性が高い
             println!("[gmail] list_messages: still 401 after token refresh for {} - credentials may be invalid", account_id);
             let error_text = response.text().await.map_err(AppError::from)?;
-            return Err(AppError::AuthError(format!("認証が無効です。アカウントを再設定してください。Gmail: {}", error_text)));
+            return Err(AppError::AuthError(format!(
+                "認証が無効です。アカウントを再設定してください。Gmail: {}",
+                error_text
+            )));
         }
     }
 
     if !response.status().is_success() {
         let error_text = response.text().await.map_err(AppError::from)?;
-        return Err(AppError::ApiError(format!("Gmail API error: {}", error_text)));
+        return Err(AppError::ApiError(format!(
+            "Gmail API error: {}",
+            error_text
+        )));
     }
 
     // Parse response manually via serde_json::Value for robustness against Gmail API shape changes
     let json: serde_json::Value = response.json().await.map_err(AppError::from)?;
 
     // Extract message IDs from the messages array
-    let raw_messages: &[serde_json::Value] = json.get("messages")
+    let raw_messages: &[serde_json::Value] = json
+        .get("messages")
         .and_then(|m| m.as_array())
         .map(|v| v.as_slice())
         .unwrap_or(&[]);
 
     let message_ids: Vec<String> = raw_messages
         .iter()
-        .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()))
+        .filter_map(|m| {
+            m.get("id")
+                .and_then(|id| id.as_str())
+                .map(|s| s.to_string())
+        })
         .collect();
 
     // Build summary list with default fields, then enrich
@@ -442,7 +515,11 @@ pub async fn list_messages(
         .iter()
         .filter_map(|m| {
             let id_str = m.get("id").and_then(|v| v.as_str())?;
-            let thread_id_str = m.get("threadId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let thread_id_str = m
+                .get("threadId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             Some(GmailMessageSummary {
                 id: id_str.to_string(),
                 thread_id: thread_id_str,
@@ -454,12 +531,17 @@ pub async fn list_messages(
         })
         .collect();
 
-    println!("[gmail] Found {} message IDs, fetching metadata", message_ids.len());
+    println!(
+        "[gmail] Found {} message IDs, fetching metadata",
+        message_ids.len()
+    );
 
     // Fetch metadata for each message
     let mut enriched_count = 0;
     for msg_id in &message_ids {
-        if let Some((subject, from, date, snippet)) = fetch_message_meta(&client, &token, msg_id).await {
+        if let Some((subject, from, date, snippet)) =
+            fetch_message_meta(&client, &token, msg_id).await
+        {
             let id_str = msg_id.as_str();
             if let Some(m) = messages.iter_mut().find(|msg| msg.id.as_str() == id_str) {
                 m.subject = subject;
@@ -471,10 +553,15 @@ pub async fn list_messages(
         }
     }
 
-    println!("[gmail] Enriched {} of {} messages", enriched_count, message_ids.len());
+    println!(
+        "[gmail] Enriched {} of {} messages",
+        enriched_count,
+        message_ids.len()
+    );
 
     // Extract and normalize nextPageToken (empty string → None)
-    let next_page_token = json.get("nextPageToken")
+    let next_page_token = json
+        .get("nextPageToken")
         .and_then(|t| t.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
@@ -494,11 +581,15 @@ pub async fn get_message_details(
     message_id: String,
 ) -> Result<MessageDetail, AppError> {
     let client = Client::new();
-    let url = format!("https://gmail.googleapis.com/gmail/v1/users/me/messages/{}", message_id);
+    let url = format!(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}",
+        message_id
+    );
 
     // keyringからアクセストークンを直接取得（事前tokeninfoチェックは行わない）
-    let token = get_access_token_for(&account_id)?
-        .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))?;
+    let token = get_access_token_for(&account_id)?.ok_or_else(|| {
+        AppError::AuthError("No access token found. Please login first.".to_string())
+    })?;
 
     let mut response = client
         .get(&url)
@@ -509,7 +600,10 @@ pub async fn get_message_details(
 
     // レスポンスが401の場合: トークンをリフレッシュして自動リトライ
     if response.status() == 401 {
-        println!("[gmail] get_message_details: 401 received, refreshing token for {}", account_id);
+        println!(
+            "[gmail] get_message_details: 401 received, refreshing token for {}",
+            account_id
+        );
         let new_token = refresh_access_token_for(&account_id).await?;
         // 新しいトークンは keyring に再保存済み（refresh_access_token_for 内で保存される）
         let _ = app.emit("token-refreshed", &account_id);
@@ -523,19 +617,22 @@ pub async fn get_message_details(
             // リトライ後も401の場合: クレデンシャルが無効である可能性が高い
             println!("[gmail] get_message_details: still 401 after token refresh for {} - credentials may be invalid", account_id);
             let error_text = response.text().await.map_err(AppError::from)?;
-            return Err(AppError::AuthError(format!("認証が無効です。アカウントを再設定してください。Gmail: {}", error_text)));
+            return Err(AppError::AuthError(format!(
+                "認証が無効です。アカウントを再設定してください。Gmail: {}",
+                error_text
+            )));
         }
     }
 
     if !response.status().is_success() {
         let error_text = response.text().await.map_err(AppError::from)?;
-        return Err(AppError::ApiError(format!("Gmail API error: {}", error_text)));
+        return Err(AppError::ApiError(format!(
+            "Gmail API error: {}",
+            error_text
+        )));
     }
 
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(AppError::from)?;
+    let json: serde_json::Value = response.json().await.map_err(AppError::from)?;
 
     let snippet = json["snippet"].as_str().unwrap_or("").to_string();
 
@@ -556,12 +653,20 @@ pub async fn get_message_details(
     let mut html_body = "".to_string();
     let mut cid_map: Vec<(String, String)> = Vec::new();
 
-    fn search_parts(part: &serde_json::Value, text_ref: &mut String, html_ref: &mut String, cids: &mut Vec<(String, String)>, attachments: &mut Vec<AttachmentInfo>) {
+    fn search_parts(
+        part: &serde_json::Value,
+        text_ref: &mut String,
+        html_ref: &mut String,
+        cids: &mut Vec<(String, String)>,
+        attachments: &mut Vec<AttachmentInfo>,
+    ) {
         let _mime = part["mimeType"].as_str().unwrap_or("unknown");
 
         // Extract Content-ID, charset, and filename from headers
-        let (content_id, charset, filename_hdr) = if let Some(headers) = part["headers"].as_array() {
-            let (mut cid, mut cs, mut fn_name): (Option<String>, Option<String>, Option<String>) = (None, None, None);
+        let (content_id, charset, filename_hdr) = if let Some(headers) = part["headers"].as_array()
+        {
+            let (mut cid, mut cs, mut fn_name): (Option<String>, Option<String>, Option<String>) =
+                (None, None, None);
             for h in headers {
                 let name = h.get("name").and_then(|n| n.as_str());
                 let value = h.get("value").and_then(|v| v.as_str());
@@ -575,7 +680,9 @@ pub async fn get_message_details(
                             v.find("charset")
                                 .map(|idx| &v[idx..])
                                 .and_then(|s| s.splitn(2, '=').nth(1))
-                                .map(|s| s.trim_matches(|c| c == '"' || c == '\'').trim().to_string())
+                                .map(|s| {
+                                    s.trim_matches(|c| c == '"' || c == '\'').trim().to_string()
+                                })
                         });
                     }
                     Some("CONTENT-DISPOSITION") => {
@@ -599,25 +706,32 @@ pub async fn get_message_details(
 
             // Gmail API uses URL-safe base64 without padding, but some messages
             // may have padding or use standard base64. Try multiple strategies.
-            let decoded_bytes = base64::Engine::decode(
-                &base64::engine::general_purpose::URL_SAFE_NO_PAD, data
-            ).or_else(|_| {
-                let stripped = data.trim_end_matches('=');
-                base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, stripped)
-            }).or_else(|_| {
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
-            }).or_else(|_| {
-                let stripped = data.trim_end_matches('=');
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD_NO_PAD, stripped)
-            });
+            let decoded_bytes =
+                base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, data)
+                    .or_else(|_| {
+                        let stripped = data.trim_end_matches('=');
+                        base64::Engine::decode(
+                            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                            stripped,
+                        )
+                    })
+                    .or_else(|_| {
+                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
+                    })
+                    .or_else(|_| {
+                        let stripped = data.trim_end_matches('=');
+                        base64::Engine::decode(
+                            &base64::engine::general_purpose::STANDARD_NO_PAD,
+                            stripped,
+                        )
+                    });
 
             if let Ok(decoded) = decoded_bytes {
                 if mime_type.starts_with("text/") {
                     let charset_ref = encoding_rs::Encoding::for_label(
-                        charset.as_ref()
-                            .map(|s| s.as_bytes())
-                            .unwrap_or(b"utf-8")
-                    ).unwrap_or(encoding_rs::UTF_8);
+                        charset.as_ref().map(|s| s.as_bytes()).unwrap_or(b"utf-8"),
+                    )
+                    .unwrap_or(encoding_rs::UTF_8);
                     let (decoded_str, _, had_errors) = charset_ref.decode(&decoded);
 
                     // If charset decoding had errors, try UTF-8 as fallback
@@ -636,14 +750,20 @@ pub async fn get_message_details(
                     }
                 } else if mime_type.starts_with("image/") {
                     if let Some(cid) = &content_id {
-                        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &decoded);
+                        let b64 = base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &decoded,
+                        );
                         let data_uri = format!("data:{};base64,{}", mime_type, b64);
                         cids.push((cid.clone(), data_uri));
                     }
                 } else {
                     // File attachment (PDF, DOC, ZIP, etc.)
                     if let Some(filename) = &filename_hdr {
-                        let b64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &decoded);
+                        let b64_data = base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &decoded,
+                        );
                         attachments.push(AttachmentInfo {
                             filename: filename.clone(),
                             mime_type: mime_type.to_string(),
@@ -663,7 +783,13 @@ pub async fn get_message_details(
 
     // Collect attachments alongside body parsing
     let mut attachments: Vec<AttachmentInfo> = Vec::new();
-    search_parts(payload, &mut text_body, &mut html_body, &mut cid_map, &mut attachments);
+    search_parts(
+        payload,
+        &mut text_body,
+        &mut html_body,
+        &mut cid_map,
+        &mut attachments,
+    );
 
     // Prefer HTML body for proper rendering; fallback to plain text
     if !html_body.is_empty() {
@@ -745,7 +871,9 @@ fn infer_mime_type(filename: &str) -> String {
         "pdf" => "application/pdf",
         "doc" | "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "xls" | "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "ppt" | "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "ppt" | "pptx" => {
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        }
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -760,7 +888,8 @@ fn infer_mime_type(filename: &str) -> String {
         "json" => "application/json",
         "xml" => "application/xml",
         _ => "application/octet-stream",
-    }.to_string()
+    }
+    .to_string()
 }
 
 /// Generate a random MIME boundary string using the `rand` crate.
@@ -866,8 +995,9 @@ pub async fn send_email(
     let url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
 
     // keyringからアクセストークンを直接取得（事前tokeninfoチェックは行わない）
-    let token = get_access_token_for(&account_id)?
-        .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))?;
+    let token = get_access_token_for(&account_id)?.ok_or_else(|| {
+        AppError::AuthError("No access token found. Please login first.".to_string())
+    })?;
 
     // Build the raw RFC 2822 email message
     let raw = if attachments.is_empty() {
@@ -883,10 +1013,21 @@ pub async fn send_email(
         format!("{}{}", headers, body)
     } else {
         // Multipart MIME with attachments
-        build_multipart_message(&to, &subject, &body, cc.as_deref(), bcc.as_deref(), &attachments)
+        build_multipart_message(
+            &to,
+            &subject,
+            &body,
+            cc.as_deref(),
+            bcc.as_deref(),
+            &attachments,
+        )
     };
 
-    println!("[gmail] send_email: account_id={}, has_attachments={}", account_id, !attachments.is_empty());
+    println!(
+        "[gmail] send_email: account_id={}, has_attachments={}",
+        account_id,
+        !attachments.is_empty()
+    );
 
     let raw_encoded = base64::Engine::encode(
         &base64::engine::general_purpose::URL_SAFE_NO_PAD,
@@ -905,7 +1046,10 @@ pub async fn send_email(
 
     // レスポンスが401の場合: トークンをリフレッシュして自動リトライ
     if response.status() == 401 {
-        println!("[gmail] send_email: 401 received, refreshing token for {}", account_id);
+        println!(
+            "[gmail] send_email: 401 received, refreshing token for {}",
+            account_id
+        );
         let new_token = refresh_access_token_for(&account_id).await?;
         // 新しいトークンは keyring に再保存済み（refresh_access_token_for 内で保存される）
         let _ = app.emit("token-refreshed", &account_id);
@@ -928,7 +1072,10 @@ pub async fn send_email(
 
     if !response.status().is_success() {
         let error_text = response.text().await.map_err(AppError::from)?;
-        return Err(AppError::ApiError(format!("Gmail API error: {}", error_text)));
+        return Err(AppError::ApiError(format!(
+            "Gmail API error: {}",
+            error_text
+        )));
     }
 
     println!("[gmail] email sent successfully for {}", account_id);
@@ -952,8 +1099,9 @@ pub async fn modify_labels(
     );
 
     // keyringからアクセストークンを直接取得
-    let token = get_access_token_for(&account_id)?
-        .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))?;
+    let token = get_access_token_for(&account_id)?.ok_or_else(|| {
+        AppError::AuthError("No access token found. Please login first.".to_string())
+    })?;
 
     let payload = serde_json::json!({
         "addLabelIds": if add_label_ids.is_empty() { serde_json::Value::Null } else { serde_json::json!(add_label_ids) },
@@ -961,7 +1109,10 @@ pub async fn modify_labels(
     });
 
     // ログ出力: 何を行うか可視化する
-    println!("[gmail] modify_labels: message_id={}, add={:?}, remove={:?}", message_id, add_label_ids, remove_label_ids);
+    println!(
+        "[gmail] modify_labels: message_id={}, add={:?}, remove={:?}",
+        message_id, add_label_ids, remove_label_ids
+    );
 
     let mut response = client
         .post(&url)
@@ -973,7 +1124,10 @@ pub async fn modify_labels(
 
     // レスポンスが401の場合: トークンをリフレッシュして自動リトライ
     if response.status() == 401 {
-        println!("[gmail] modify_labels: 401 received, refreshing token for {}", account_id);
+        println!(
+            "[gmail] modify_labels: 401 received, refreshing token for {}",
+            account_id
+        );
         let new_token = refresh_access_token_for(&account_id).await?;
         let _ = app.emit("token-refreshed", &account_id);
         response = client
@@ -994,10 +1148,16 @@ pub async fn modify_labels(
 
     if !response.status().is_success() {
         let error_text = response.text().await.map_err(AppError::from)?;
-        return Err(AppError::ApiError(format!("Gmail API modifyLabels error: {}", error_text)));
+        return Err(AppError::ApiError(format!(
+            "Gmail API modifyLabels error: {}",
+            error_text
+        )));
     }
 
-    println!("[gmail] modify_labels: success for message_id={}", message_id);
+    println!(
+        "[gmail] modify_labels: success for message_id={}",
+        message_id
+    );
     Ok(ModifyLabelsResponse {
         success: true,
         message_id,
@@ -1069,17 +1229,26 @@ mod tests {
     // --- strip_trailing_punctuation tests ---
     #[test]
     fn strip_trailing_strips_period() {
-        assert_eq!(strip_trailing_punctuation("https://x.com."), "https://x.com");
+        assert_eq!(
+            strip_trailing_punctuation("https://x.com."),
+            "https://x.com"
+        );
     }
 
     #[test]
     fn strip_trailing_strips_multiple() {
-        assert_eq!(strip_trailing_punctuation("https://x.com..."), "https://x.com");
+        assert_eq!(
+            strip_trailing_punctuation("https://x.com..."),
+            "https://x.com"
+        );
     }
 
     #[test]
     fn strip_trailing_strips_closing_paren() {
-        assert_eq!(strip_trailing_punctuation("https://x.com)"), "https://x.com");
+        assert_eq!(
+            strip_trailing_punctuation("https://x.com)"),
+            "https://x.com"
+        );
     }
 
     #[test]
@@ -1090,7 +1259,10 @@ mod tests {
 
     #[test]
     fn strip_trailing_strips_comma_semicolon_colon() {
-        assert_eq!(strip_trailing_punctuation("https://x.com;,:"), "https://x.com");
+        assert_eq!(
+            strip_trailing_punctuation("https://x.com;,:"),
+            "https://x.com"
+        );
     }
 
     // --- plain_text_to_html tests (HIGH VALUE) ---
@@ -1244,7 +1416,7 @@ mod tests {
         let json = serde_json::to_value(&args).unwrap();
         assert_eq!(json["accountId"], "user@test.com");
         assert_eq!(json["messageId"], "msg123");
-        assert_eq!(json["addLabelIds"], serde_json::json!([ "LABEL_STARRED"]));
+        assert_eq!(json["addLabelIds"], serde_json::json!(["LABEL_STARRED"]));
         assert!(json["removeLabelIds"].is_array());
         assert_eq!(json["removeLabelIds"].as_array().unwrap().len(), 0);
     }
@@ -1259,7 +1431,7 @@ mod tests {
         };
         let json = serde_json::to_value(&args).unwrap();
         assert!(json["addLabelIds"].as_array().unwrap().is_empty());
-        assert_eq!(json["removeLabelIds"], serde_json::json!([ "LABEL_STARRED"]));
+        assert_eq!(json["removeLabelIds"], serde_json::json!(["LABEL_STARRED"]));
     }
 
     #[test]
@@ -1271,7 +1443,7 @@ mod tests {
             remove_label_ids: vec!["LABEL_INBOX".to_string()],
         };
         let json = serde_json::to_value(&args).unwrap();
-        assert_eq!(json["removeLabelIds"], serde_json::json!([ "LABEL_INBOX"]));
+        assert_eq!(json["removeLabelIds"], serde_json::json!(["LABEL_INBOX"]));
     }
 
     #[test]
@@ -1283,8 +1455,8 @@ mod tests {
             remove_label_ids: vec!["LABEL_INBOX".to_string()],
         };
         let json = serde_json::to_value(&args).unwrap();
-        assert_eq!(json["addLabelIds"], serde_json::json!([ "LABEL_TRASH"]));
-        assert_eq!(json["removeLabelIds"], serde_json::json!([ "LABEL_INBOX"]));
+        assert_eq!(json["addLabelIds"], serde_json::json!(["LABEL_TRASH"]));
+        assert_eq!(json["removeLabelIds"], serde_json::json!(["LABEL_INBOX"]));
     }
 
     #[test]
@@ -1296,7 +1468,7 @@ mod tests {
             remove_label_ids: vec!["LABEL_INBOX".to_string()],
         };
         let json = serde_json::to_value(&args).unwrap();
-        assert_eq!(json["addLabelIds"], serde_json::json!([ "LABEL_SPAM"]));
+        assert_eq!(json["addLabelIds"], serde_json::json!(["LABEL_SPAM"]));
     }
 
     #[test]
@@ -1503,7 +1675,14 @@ mod tests {
 
     #[test]
     fn build_multipart_message_with_cc_bcc() {
-        let msg = build_multipart_message("to@test.com", "Subject", "Body", Some("cc@test.com"), Some("bcc@test.com"), &[]);
+        let msg = build_multipart_message(
+            "to@test.com",
+            "Subject",
+            "Body",
+            Some("cc@test.com"),
+            Some("bcc@test.com"),
+            &[],
+        );
         assert!(msg.contains("Cc: cc@test.com"));
         assert!(msg.contains("Bcc: bcc@test.com"));
     }
@@ -1515,7 +1694,14 @@ mod tests {
             mime_type: "".to_string(),
             data: "dGVzdCBkYXRh".to_string(),
         }];
-        let msg = build_multipart_message("to@test.com", "Subject", "<p>Body</p>", None, None, &attachments);
+        let msg = build_multipart_message(
+            "to@test.com",
+            "Subject",
+            "<p>Body</p>",
+            None,
+            None,
+            &attachments,
+        );
         assert!(msg.contains("multipart/mixed"));
         assert!(msg.contains("Content-Type: application/pdf"));
         assert!(msg.contains("Content-Disposition: attachment; filename=\"test.pdf\""));
@@ -1529,7 +1715,14 @@ mod tests {
             mime_type: "application/custom".to_string(),
             data: "data".to_string(),
         }];
-        let msg = build_multipart_message("to@test.com", "Subject", "<p>Body</p>", None, None, &attachments);
+        let msg = build_multipart_message(
+            "to@test.com",
+            "Subject",
+            "<p>Body</p>",
+            None,
+            None,
+            &attachments,
+        );
         assert!(msg.contains("Content-Type: application/custom"));
     }
 

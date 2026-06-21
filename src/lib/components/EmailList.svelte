@@ -38,13 +38,14 @@
 
 <div class="email-list-view">
     <div class="message-list">
-        {#each emailStore.messages as message (message.id)}
+        {#each emailStore.messages as message, idx (message.id)}
             <div class="message-row">
                 <button
                     class="message-item"
                     class:read={message.read}
                     class:active={emailStore.selectedMessage?.id === message.id}
-                    onclick={() => emailStore.loadMessageDetail(message.id)}
+                    class:cursor={idx === emailStore.listCursorIndex}
+                    onclick={() => { emailStore.listCursorIndex = idx; emailStore.loadMessageDetail(message.id); }}
                 >
                     <div class="message-header">
                         <span class="sender">{truncate(formatSender(message.from), 25)}</span>
@@ -138,6 +139,11 @@
 
     .message-item.active {
         background-color: rgba(66, 133, 244, 0.15);
+        border-color: #4285f4;
+    }
+
+    .message-item.cursor {
+        background-color: rgba(66, 133, 244, 0.1);
         border-color: #4285f4;
     }
 

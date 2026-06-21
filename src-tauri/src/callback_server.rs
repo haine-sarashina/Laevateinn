@@ -1,11 +1,11 @@
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
-use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{Emitter, EventTarget, Manager};
-use tiny_http::{Server, Request, Response, StatusCode};
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use tauri::{Emitter, EventTarget, Manager};
+use tiny_http::{Request, Response, Server, StatusCode};
 
 pub const CALLBACK_PORT: u16 = 62000;
 pub const CALLBACK_REDIRECT_URI: &str = "http://localhost:62000/callback";
@@ -74,7 +74,8 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
 
     // Check for OAuth error from Google
     if let Some(error_code) = params.get("error") {
-        let error_msg = params.get("error_description")
+        let error_msg = params
+            .get("error_description")
             .unwrap_or(error_code)
             .to_string();
         let _ = request.respond(error_page(&error_msg));
@@ -106,7 +107,9 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     let verifier = match crate::commands::auth::verify_and_get_verifier(&state) {
         Some(v) => v,
         None => {
-            let _ = request.respond(error_page("stateの有効期限が切れました。再度認証を開始してください。"));
+            let _ = request.respond(error_page(
+                "stateの有効期限が切れました。再度認証を開始してください。",
+            ));
             return;
         }
     };
@@ -147,7 +150,10 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     let response_text = match response.text().await {
         Ok(t) => t,
         Err(e) => {
-            let _ = request.respond(error_page(&format!("レスポンスの読み込みに失敗しました: {}", e)));
+            let _ = request.respond(error_page(&format!(
+                "レスポンスの読み込みに失敗しました: {}",
+                e
+            )));
             return;
         }
     };
@@ -155,7 +161,10 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     let token_data: serde_json::Value = match serde_json::from_str(&response_text) {
         Ok(v) => v,
         Err(_) => {
-            let _ = request.respond(error_page(&format!("レスポンスの解析に失敗しました: {}", response_text)));
+            let _ = request.respond(error_page(&format!(
+                "レスポンスの解析に失敗しました: {}",
+                response_text
+            )));
             return;
         }
     };
@@ -182,7 +191,10 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     {
         Ok(r) => r,
         Err(e) => {
-            let _ = request.respond(error_page(&format!("ユーザー情報の取得に失敗しました: {}", e)));
+            let _ = request.respond(error_page(&format!(
+                "ユーザー情報の取得に失敗しました: {}",
+                e
+            )));
             return;
         }
     };
@@ -190,7 +202,10 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     let user_info_text = match user_info.text().await {
         Ok(t) => t,
         Err(e) => {
-            let _ = request.respond(error_page(&format!("ユーザー情報の読み込みに失敗しました: {}", e)));
+            let _ = request.respond(error_page(&format!(
+                "ユーザー情報の読み込みに失敗しました: {}",
+                e
+            )));
             return;
         }
     };
@@ -198,7 +213,10 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     let user_info: serde_json::Value = match serde_json::from_str(&user_info_text) {
         Ok(v) => v,
         Err(e) => {
-            let _ = request.respond(error_page(&format!("ユーザー情報の解析に失敗しました: {}", e)));
+            let _ = request.respond(error_page(&format!(
+                "ユーザー情報の解析に失敗しました: {}",
+                e
+            )));
             return;
         }
     };
@@ -207,7 +225,9 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     println!("[callback_server] OAuth success for email={}", email);
 
     // Save tokens/accounts via add_account_internal (single source of truth)
-    match crate::commands::auth::add_account_internal(email.clone(), access_token, refresh_token).await {
+    match crate::commands::auth::add_account_internal(email.clone(), access_token, refresh_token)
+        .await
+    {
         Ok(_) => println!("[callback_server] account saved for {}", email),
         Err(e) => {
             println!("[callback_server] failed to save account: {}", e);
@@ -219,7 +239,10 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     // Notify frontend that a new account was added via OAuth
     if let Some(window) = app.get_webview_window("main") {
         match window.emit_to(EventTarget::webview("main"), "oauth-account-added", &email) {
-            Ok(_) => println!("[callback_server] emitted oauth-account-added for {}", email),
+            Ok(_) => println!(
+                "[callback_server] emitted oauth-account-added for {}",
+                email
+            ),
             Err(e) => println!("[callback_server] failed to emit event: {}", e),
         }
     } else {
@@ -274,8 +297,8 @@ pub fn start_server(app: tauri::AppHandle) {
         socket.listen(128).expect("Failed to listen");
         let listener: TcpListener = socket.into();
 
-        let server = Server::from_listener(listener, None)
-            .expect("Failed to start OAuth callback server");
+        let server =
+            Server::from_listener(listener, None).expect("Failed to start OAuth callback server");
 
         println!("[callback_server] listening on port {}", CALLBACK_PORT);
 

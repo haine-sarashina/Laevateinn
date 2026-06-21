@@ -1,13 +1,13 @@
+use crate::error::AppError;
+use base64::Engine;
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
-use crate::error::AppError;
-use tracing::info;
-use tauri::Emitter;
+use sha2::Digest;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::Instant;
-use base64::Engine;
-use sha2::Digest;
+use tauri::Emitter;
+use tracing::info;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AccountInfo {
@@ -33,17 +33,22 @@ struct TokenResponse {
 pub const SERVICE_NAME: &str = "laevateinn-mail";
 const ACCOUNTS_LIST_KEY: &str = "accounts_list";
 /// Default client credentials (used when env vars are not set)
-const DEFAULT_CLIENT_ID: &str = "199450902096-mbc7ucd7777rtek56gnprac1mcfjobuk.apps.googleusercontent.com";
+const DEFAULT_CLIENT_ID: &str =
+    "199450902096-mbc7ucd7777rtek56gnprac1mcfjobuk.apps.googleusercontent.com";
 const DEFAULT_CLIENT_SECRET: &str = "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";
 
 /// Resolve CLIENT_ID from env `GOOGLE_OAUTH_CLIENT_ID`, falling back to default.
 pub static CLIENT_ID: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("GOOGLE_OAUTH_CLIENT_ID").ok().unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string())
+    std::env::var("GOOGLE_OAUTH_CLIENT_ID")
+        .ok()
+        .unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string())
 });
 
 /// Resolve CLIENT_SECRET from env `GOOGLE_OAUTH_CLIENT_SECRET`, falling back to default.
 pub static CLIENT_SECRET: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("GOOGLE_OAUTH_CLIENT_SECRET").ok().unwrap_or_else(|| DEFAULT_CLIENT_SECRET.to_string())
+    std::env::var("GOOGLE_OAUTH_CLIENT_SECRET")
+        .ok()
+        .unwrap_or_else(|| DEFAULT_CLIENT_SECRET.to_string())
 });
 const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const REDIRECT_URI: &str = "http://localhost:62000/callback";
@@ -109,7 +114,10 @@ fn get_accounts_list() -> Result<Vec<String>, AppError> {
     if let Ok(cache) = ACCOUNT_CACHE.read() {
         let accounts = cache.clone();
         if !accounts.is_empty() {
-            println!("[get_accounts_list] returning {} accounts from in-memory cache", accounts.len());
+            println!(
+                "[get_accounts_list] returning {} accounts from in-memory cache",
+                accounts.len()
+            );
             return Ok(accounts);
         }
     }
@@ -136,10 +144,13 @@ fn save_accounts_list(list: &[String]) -> Result<(), AppError> {
 pub async fn get_accounts() -> Result<Vec<AccountInfo>, AppError> {
     let ids = get_accounts_list()?;
     println!("[get_accounts] returning {} accounts", ids.len());
-    let accounts = ids.into_iter().map(|id| AccountInfo {
-        id: id.clone(),
-        name: id.clone(),
-    }).collect();
+    let accounts = ids
+        .into_iter()
+        .map(|id| AccountInfo {
+            id: id.clone(),
+            name: id.clone(),
+        })
+        .collect();
     Ok(accounts)
 }
 
@@ -150,7 +161,11 @@ pub async fn switch_active_for_account(_id: String) -> Result<(), AppError> {
     Ok(())
 }
 
-pub async fn add_account_internal(id: String, access_token: String, refresh_token: Option<String>) -> Result<(), AppError> {
+pub async fn add_account_internal(
+    id: String,
+    access_token: String,
+    refresh_token: Option<String>,
+) -> Result<(), AppError> {
     println!("[add_account_internal] adding account: {}", id);
     let access_entry = get_token_entry(&id, "access")?;
     access_entry.set_password(&access_token)?;
@@ -163,11 +178,17 @@ pub async fn add_account_internal(id: String, access_token: String, refresh_toke
     }
 
     let mut list = get_accounts_list()?;
-    println!("[add_account_internal] current list has {} accounts", list.len());
+    println!(
+        "[add_account_internal] current list has {} accounts",
+        list.len()
+    );
     if !list.contains(&id) {
         list.push(id.clone());
         save_accounts_list(&list)?;
-        println!("[add_account_internal] saved account list with {} accounts", list.len());
+        println!(
+            "[add_account_internal] saved account list with {} accounts",
+            list.len()
+        );
     }
 
     info!("Added account: {}", id);
@@ -175,7 +196,12 @@ pub async fn add_account_internal(id: String, access_token: String, refresh_toke
 }
 
 #[tauri::command]
-pub async fn add_account(app: tauri::AppHandle, id: String, access_token: String, refresh_token: Option<String>) -> Result<(), AppError> {
+pub async fn add_account(
+    app: tauri::AppHandle,
+    id: String,
+    access_token: String,
+    refresh_token: Option<String>,
+) -> Result<(), AppError> {
     add_account_internal(id.clone(), access_token, refresh_token).await?;
     let _ = app.emit("oauth-account-added", &id);
     Ok(())
@@ -266,7 +292,13 @@ pub async fn start_auth_flow(app: tauri::AppHandle) -> Result<serde_json::Value,
         let mut store = VERIFIER_STORE.write().map_err(|e| {
             AppError::AuthError(format!("Failed to acquire verifier store lock: {}", e))
         })?;
-        store.insert(state.clone(), VerifierEntry { verifier, created_at: std::time::Instant::now() });
+        store.insert(
+            state.clone(),
+            VerifierEntry {
+                verifier,
+                created_at: std::time::Instant::now(),
+            },
+        );
     }
 
     let auth_endpoint = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -287,22 +319,45 @@ pub async fn refresh_access_token_for(account_id: &str) -> Result<String, AppErr
         Ok(rt) if !rt.is_empty() => rt,
         _ => return Err(AppError::AuthError("No refresh token".to_string())),
     };
-    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build().map_err(|e| AppError::AuthError(e.to_string()))?;
-    let body = format!("client_id={}&client_secret={}&refresh_token={}&grant_type=refresh_token", CLIENT_ID.as_str(), CLIENT_SECRET.as_str(), refresh_token);
-    let response = client.post(TOKEN_ENDPOINT).header("Content-Type", "application/x-www-form-urlencoded").body(body).send().await.map_err(AppError::from)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AppError::AuthError(e.to_string()))?;
+    let body = format!(
+        "client_id={}&client_secret={}&refresh_token={}&grant_type=refresh_token",
+        CLIENT_ID.as_str(),
+        CLIENT_SECRET.as_str(),
+        refresh_token
+    );
+    let response = client
+        .post(TOKEN_ENDPOINT)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+        .await
+        .map_err(AppError::from)?;
     let status = response.status();
     let response_token_text = response.text().await.map_err(AppError::from)?;
-    println!("[auth] token refresh response status: {} body: {}", status, response_token_text);
+    println!(
+        "[auth] token refresh response status: {} body: {}",
+        status, response_token_text
+    );
     let token_data: Option<TokenResponse> = serde_json::from_str(&response_token_text).ok();
     if let Some(data) = &token_data {
         if let Some(ref error) = data.error {
             let error_desc = data.error_description.as_deref().unwrap_or("不明なエラー");
             println!("[auth] Google returned error: {} - {}", error, error_desc);
-            return Err(AppError::AuthError(format!("認証が切れています（{}: {}）。再ログインしてください。", error, error_desc)));
+            return Err(AppError::AuthError(format!(
+                "認証が切れています（{}: {}）。再ログインしてください。",
+                error, error_desc
+            )));
         }
     }
     if !status.is_success() {
-        return Err(AppError::AuthError(format!("トークン更新に失敗しました（HTTP {}）。再ログインしてください。", status)));
+        return Err(AppError::AuthError(format!(
+            "トークン更新に失敗しました（HTTP {}）。再ログインしてください。",
+            status
+        )));
     }
     if let Some(data) = token_data {
         if let Some(access_token) = data.access_token {
@@ -315,10 +370,14 @@ pub async fn refresh_access_token_for(account_id: &str) -> Result<String, AppErr
             }
             Ok(access_token)
         } else {
-            Err(AppError::AuthError(format!("トークン更新応答に access_token がありません。再ログインしてください。")))
+            Err(AppError::AuthError(format!(
+                "トークン更新応答に access_token がありません。再ログインしてください。"
+            )))
         }
     } else {
-        Err(AppError::AuthError(format!("トークン更新のレスポンス解析に失敗しました。再ログインしてください。")))
+        Err(AppError::AuthError(format!(
+            "トークン更新のレスポンス解析に失敗しました。再ログインしてください。"
+        )))
     }
 }
 
@@ -369,7 +428,8 @@ mod tests {
     fn pkce_challenge_is_sha256_of_verifier() {
         let (verifier, challenge) = generate_pkce_challenge();
         let expected_hash = sha2::Sha256::digest(verifier.as_bytes());
-        let expected_challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(expected_hash);
+        let expected_challenge =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(expected_hash);
         assert_eq!(challenge, expected_challenge);
     }
 
@@ -391,7 +451,11 @@ mod tests {
     fn state_contains_only_lowercase_letters() {
         let state = generate_state();
         for c in state.chars() {
-            assert!(c.is_ascii_lowercase(), "state contains non-lowercase char: {}", c);
+            assert!(
+                c.is_ascii_lowercase(),
+                "state contains non-lowercase char: {}",
+                c
+            );
         }
     }
 
