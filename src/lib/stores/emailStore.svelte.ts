@@ -1,4 +1,4 @@
-import { listMessages, getMessageDetails, listLabels, modifyLabels } from "$lib/api";
+import { listMessages, getMessageDetails, listLabels, modifyLabels, type SendAttachment } from "$lib/api";
 import type { GmailMessageDetail, GmailListResponse, GmailLabel, GmailLabelsResponse, ModifyLabelsResult } from "$lib/api";
 import { errorStore } from "./errorStore.svelte";
 import { authStore } from "./authStore.svelte";
@@ -67,6 +67,7 @@ interface SavedComposeState {
     cc: string;
     subject: string;
     body: string;
+    attachments: SendAttachment[];
 }
 
 class EmailStore {
@@ -100,6 +101,7 @@ class EmailStore {
     composeCc = $state<string>('');
     composeSubject = $state<string>('');
     composeBody = $state<string>('');
+    composeAttachments = $state<SendAttachment[]>([]);
 
     // Label support
     labels = $state<GmailLabel[]>([]);
@@ -118,6 +120,7 @@ class EmailStore {
                 cc: this.composeCc,
                 subject: this.composeSubject,
                 body: this.composeBody,
+                attachments: [...this.composeAttachments],
             });
         }
     }
@@ -133,6 +136,7 @@ class EmailStore {
                 this.composeCc = saved.cc;
                 this.composeSubject = saved.subject;
                 this.composeBody = saved.body;
+                this.composeAttachments = [...saved.attachments];
                 this.isComposing = true;
             }
         }
@@ -329,6 +333,7 @@ class EmailStore {
         this.composeCc = '';
         this.composeSubject = '';
         this.composeBody = '';
+        this.composeAttachments = [];
         this.isComposing = true;
     }
 
@@ -375,6 +380,7 @@ class EmailStore {
         this.composeCc = '';
         this.composeSubject = '';
         this.composeBody = '';
+        this.composeAttachments = [];
     }
 
     reset() {
@@ -397,6 +403,7 @@ class EmailStore {
         this.composeCc = '';
         this.composeSubject = '';
         this.composeBody = '';
+        this.composeAttachments = [];
     }
 
     async refresh() {

@@ -1,3 +1,4 @@
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use crate::commands::auth::get_access_token_for;
 use crate::commands::auth::refresh_access_token_for;
@@ -716,6 +717,116 @@ pub struct SendEmailArgs {
     pub cc: Option<String>,
     #[serde(default)]
     pub bcc: Option<String>,
+    #[serde(default)]
+    pub attachments: Vec<SendAttachment>,
+}
+
+/// Single attachment for sending an email.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendAttachment {
+    pub filename: String,
+    /// MIME type override. When empty (`""`), the type is inferred from the file extension.
+    #[serde(default)]
+    pub mime_type: String,
+    /// Base64-encoded binary data of the attachment.
+    pub data: String,
+}
+
+/// Infer a MIME type from a file extension when the caller did not provide one.
+fn infer_mime_type(filename: &str) -> String {
+    let ext = std::path::Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    match ext.as_str() {
+        "pdf" => "application/pdf",
+        "doc" | "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" | "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" | "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "txt" => "text/plain; charset=UTF-8",
+        "csv" => "text/csv; charset=UTF-8",
+        "htm" | "html" => "text/html; charset=UTF-8",
+        "zip" => "application/zip",
+        "gz" | "gzip" => "application/gzip",
+        "tar" => "application/x-tar",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        _ => "application/octet-stream",
+    }.to_string()
+}
+
+/// Generate a random MIME boundary string using the `rand` crate.
+fn generate_boundary() -> String {
+    let mut rng = rand::thread_rng();
+    let part_num: u32 = rng.gen();
+    let random_str: u64 = rng.gen();
+    format!("----=_Part_{}_{}", part_num, random_str)
+}
+
+/// Build a full MIME message (RFC 2822) with attachments.
+/// Returns the raw email string ready for Gmail API `users.messages.send`.
+fn build_multipart_message(
+    to: &str,
+    subject: &str,
+    body: &str,
+    cc: Option<&str>,
+    bcc: Option<&str>,
+    attachments: &[SendAttachment],
+) -> String {
+    let boundary = generate_boundary();
+
+    let mut msg = String::with_capacity(4096);
+
+    // Headers
+    msg.push_str(&format!("To: {}\r\n", to));
+    msg.push_str(&format!("Subject: {}\r\n", subject));
+    if let Some(cc_addr) = cc {
+        msg.push_str(&format!("Cc: {}\r\n", cc_addr));
+    }
+    if let Some(bcc_addr) = bcc {
+        msg.push_str(&format!("Bcc: {}\r\n", bcc_addr));
+    }
+    msg.push_str(&format!(
+        "MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"{}\"\r\n\r\n",
+        boundary
+    ));
+
+    // HTML body part
+    msg.push_str(&format!("--{}\r\n", boundary));
+    msg.push_str("Content-Type: text/html; charset=UTF-8\r\n\r\n");
+    msg.push_str(body);
+    msg.push_str("\r\n");
+
+    // Attachment parts
+    for att in attachments {
+        msg.push_str(&format!("--{}\r\n", boundary));
+        let mime = if att.mime_type.is_empty() {
+            infer_mime_type(&att.filename)
+        } else {
+            att.mime_type.clone()
+        };
+        msg.push_str(&format!("Content-Type: {}\r\n", mime));
+        msg.push_str(&format!(
+            "Content-Disposition: attachment; filename=\"{}\"\r\n",
+            att.filename
+        ));
+        msg.push_str("Content-Transfer-Encoding: base64\r\n\r\n");
+        msg.push_str(&att.data);
+        msg.push_str("\r\n");
+    }
+
+    // Closing boundary
+    msg.push_str(&format!("--{}--\r\n", boundary));
+
+    msg
 }
 
 /// 引数構造体: Gmail API messages.modifyLabels
@@ -749,6 +860,7 @@ pub async fn send_email(
     body: String,
     cc: Option<String>,
     bcc: Option<String>,
+    attachments: Vec<SendAttachment>,
 ) -> Result<(), AppError> {
     let client = Client::new();
     let url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
@@ -757,17 +869,24 @@ pub async fn send_email(
     let token = get_access_token_for(&account_id)?
         .ok_or_else(|| AppError::AuthError("No access token found. Please login first.".to_string()))?;
 
-    // Build RFC 2822 compliant email raw string with optional CC/BCC headers
-    let mut headers = format!("To: {}\r\nSubject: {}\r\n", to, subject);
-    if let Some(cc_addr) = &cc {
-        headers.push_str(&format!("Cc: {}\r\n", cc_addr));
-    }
-    if let Some(bcc_addr) = &bcc {
-        headers.push_str(&format!("Bcc: {}\r\n", bcc_addr));
-    }
-    headers.push_str("Content-Type: text/html; charset=UTF-8\r\nMIME-Version: 1.0\r\n\r\n");
+    // Build the raw RFC 2822 email message
+    let raw = if attachments.is_empty() {
+        // Plain text/html email (no attachments) — existing logic
+        let mut headers = format!("To: {}\r\nSubject: {}\r\n", to, subject);
+        if let Some(cc_addr) = &cc {
+            headers.push_str(&format!("Cc: {}\r\n", cc_addr));
+        }
+        if let Some(bcc_addr) = &bcc {
+            headers.push_str(&format!("Bcc: {}\r\n", bcc_addr));
+        }
+        headers.push_str("Content-Type: text/html; charset=UTF-8\r\nMIME-Version: 1.0\r\n\r\n");
+        format!("{}{}", headers, body)
+    } else {
+        // Multipart MIME with attachments
+        build_multipart_message(&to, &subject, &body, cc.as_deref(), bcc.as_deref(), &attachments)
+    };
 
-    let raw = format!("{}{}", headers, body);
+    println!("[gmail] send_email: account_id={}, has_attachments={}", account_id, !attachments.is_empty());
 
     let raw_encoded = base64::Engine::encode(
         &base64::engine::general_purpose::URL_SAFE_NO_PAD,
@@ -1237,6 +1356,7 @@ mod tests {
             body: "<p>Hi</p>".to_string(),
             cc: Some("cc@example.com".to_string()),
             bcc: None,
+            attachments: Vec::new(),
         };
         let json = serde_json::to_value(&args).unwrap();
         assert_eq!(json["cc"], "cc@example.com");
@@ -1252,6 +1372,7 @@ mod tests {
             body: "<p>Body</p>".to_string(),
             cc: None,
             bcc: Some("bcc@example.com".to_string()),
+            attachments: Vec::new(),
         };
         let json = serde_json::to_value(&args).unwrap();
         assert!(json["cc"].is_null());
@@ -1267,6 +1388,7 @@ mod tests {
             body: "<p>Hi</p>".to_string(),
             cc: Some("cc@example.com".to_string()),
             bcc: Some("bcc@example.com".to_string()),
+            attachments: Vec::new(),
         };
         let json = serde_json::to_value(&args).unwrap();
         assert_eq!(json["cc"], "cc@example.com");
@@ -1336,5 +1458,84 @@ mod tests {
         let json_str = serde_json::to_string(&detail).unwrap();
         assert!(json_str.contains("attachments"));
         assert!(json_str.contains("data.csv"));
+    }
+
+    // --- MIME multipart building tests ---
+    #[test]
+    fn infer_mime_type_pdf() {
+        assert_eq!(infer_mime_type("document.pdf"), "application/pdf");
+    }
+
+    #[test]
+    fn infer_mime_type_image() {
+        assert_eq!(infer_mime_type("photo.png"), "image/png");
+        assert_eq!(infer_mime_type("photo.jpg"), "image/jpeg");
+        assert_eq!(infer_mime_type("photo.jpeg"), "image/jpeg");
+        assert_eq!(infer_mime_type("image.gif"), "image/gif");
+    }
+
+    #[test]
+    fn infer_mime_type_text() {
+        assert_eq!(infer_mime_type("notes.txt"), "text/plain; charset=UTF-8");
+        assert_eq!(infer_mime_type("data.csv"), "text/csv; charset=UTF-8");
+    }
+
+    #[test]
+    fn infer_mime_type_archive() {
+        assert_eq!(infer_mime_type("archive.zip"), "application/zip");
+        assert_eq!(infer_mime_type("backup.tar"), "application/x-tar");
+    }
+
+    #[test]
+    fn infer_mime_type_unknown_extension() {
+        assert_eq!(infer_mime_type("file.xyz"), "application/octet-stream");
+        assert_eq!(infer_mime_type("noext"), "application/octet-stream");
+    }
+
+    #[test]
+    fn build_multipart_message_no_attachments() {
+        let msg = build_multipart_message("to@test.com", "Subject", "Body", None, None, &[]);
+        assert!(msg.contains("To: to@test.com"));
+        assert!(msg.contains("Subject: Subject"));
+        assert!(!msg.contains("Cc:"));
+        assert!(!msg.contains("Bcc:"));
+    }
+
+    #[test]
+    fn build_multipart_message_with_cc_bcc() {
+        let msg = build_multipart_message("to@test.com", "Subject", "Body", Some("cc@test.com"), Some("bcc@test.com"), &[]);
+        assert!(msg.contains("Cc: cc@test.com"));
+        assert!(msg.contains("Bcc: bcc@test.com"));
+    }
+
+    #[test]
+    fn build_multipart_message_with_attachment() {
+        let attachments = vec![SendAttachment {
+            filename: "test.pdf".to_string(),
+            mime_type: "".to_string(),
+            data: "dGVzdCBkYXRh".to_string(),
+        }];
+        let msg = build_multipart_message("to@test.com", "Subject", "<p>Body</p>", None, None, &attachments);
+        assert!(msg.contains("multipart/mixed"));
+        assert!(msg.contains("Content-Type: application/pdf"));
+        assert!(msg.contains("Content-Disposition: attachment; filename=\"test.pdf\""));
+        assert!(msg.contains("dGVzdCBkYXRh"));
+    }
+
+    #[test]
+    fn build_multipart_message_with_custom_mime_type() {
+        let attachments = vec![SendAttachment {
+            filename: "file.txt".to_string(),
+            mime_type: "application/custom".to_string(),
+            data: "data".to_string(),
+        }];
+        let msg = build_multipart_message("to@test.com", "Subject", "<p>Body</p>", None, None, &attachments);
+        assert!(msg.contains("Content-Type: application/custom"));
+    }
+
+    #[test]
+    fn generate_boundary_is_valid() {
+        let boundary = generate_boundary();
+        assert!(boundary.starts_with("----=_Part_"));
     }
 }

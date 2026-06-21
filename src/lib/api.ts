@@ -143,6 +143,15 @@ export async function listLabels(accountId: string): Promise<GmailLabelsResponse
 }
 
 /**
+ * Attachment data for sending an email.
+ */
+export interface SendAttachment {
+    filename: string;
+    mimeType: string;
+    data: string; // base64 encoded
+}
+
+/**
  * Sends an email via Gmail API.
  */
 export async function sendEmail(
@@ -152,6 +161,7 @@ export async function sendEmail(
     body: string,
     cc?: string,
     bcc?: string,
+    attachments?: SendAttachment[],
 ): Promise<void> {
     return await safeInvoke<void>('send_email', {
         accountId,
@@ -160,6 +170,7 @@ export async function sendEmail(
         body,
         cc: cc || null,
         bcc: bcc || null,
+        attachments: attachments || [],
     });
 }
 
