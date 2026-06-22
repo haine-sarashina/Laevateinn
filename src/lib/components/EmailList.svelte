@@ -1,5 +1,8 @@
 <script lang="ts">
     import { emailStore } from "$lib/stores/emailStore.svelte";
+    import { createVirtualScroll } from "$lib/utils/virtualScroll";
+
+    const VIRTUAL_ROW_HEIGHT = 76;
 
     async function loadMore() {
         await emailStore.loadMoreMessages();
@@ -34,38 +37,82 @@
     function truncate(text: string, maxLen: number): string {
         return text.length > maxLen ? text.slice(0, maxLen) + '...' : text;
     }
+
+    // ── Virtual scrolling ──────────────────────────────────────
+    let container = $state<HTMLElement | null>(null);
+    let scrollTop = $state(0);
+
+    const vs = createVirtualScroll({
+        getItemCount: () => emailStore.messages.length,
+        rowHeight: VIRTUAL_ROW_HEIGHT,
+    });
+
+    // Attach when container mounts, cleanup on unmount
+    $effect(() => {
+        if (container) {
+            vs.attach(container);
+            return () => vs.detach();
+        }
+    });
+
+    // Recompute virtual scroll state on every scrollTop or message-count change
+    const vsState = $derived(vs.update(scrollTop));
+
+    // Scroll to cursor when it changes (keyboard navigation)
+    $effect(() => {
+        if (container && emailStore.listCursorIndex >= 0) {
+            vs.scrollToIndex(emailStore.listCursorIndex);
+        }
+    });
 </script>
 
 <div class="email-list-view">
-    <div class="message-list">
-        {#each emailStore.messages as message, idx (message.id)}
-            <div class="message-row">
-                <button
-                    class="message-item"
-                    class:read={message.read}
-                    class:active={emailStore.selectedMessage?.id === message.id}
-                    class:cursor={idx === emailStore.listCursorIndex}
-                    onclick={() => { emailStore.listCursorIndex = idx; emailStore.loadMessageDetail(message.id); }}
+    <div
+        class="message-list"
+        bind:this={container}
+        onscroll={(e) => { scrollTop = (e.target as HTMLDivElement).scrollTop; }}
+    >
+        <!-- Top spacer to push visible items down -->
+        <div style="height: {vsState.offsetTop}px"></div>
+
+        <!-- Only render visible items with absolute positioning -->
+        {#each vsState.visibleItems as item (item.index)}
+            {@const message = emailStore.messages[item.index]}
+            {#if message}
+                <div
+                    class="message-row"
+                    style="position: absolute; top: {item.top}px; left: 0; right: 0;"
                 >
-                    <div class="message-header">
-                        <span class="sender">{truncate(formatSender(message.from), 25)}</span>
-                        <span class="date">{formatDate(message.date)}</span>
-                    </div>
-                    <div class="message-subject">{message.subject || 'No Subject'}</div>
-                    <div class="message-snippet">
-                        {message.snippet ? truncate(message.snippet, 80) : 'No preview available'}
-                    </div>
-                </button>
-                <button
-                    class="star-btn"
-                    class:starred={message.starred}
-                    title={message.starred ? "Unstar" : "Star"}
-                    onclick={(e) => { e.stopPropagation(); emailStore.toggleStar(message.id); }}
-                >
-                    {message.starred ? '★' : '☆'}
-                </button>
-            </div>
+                    <button
+                        class="message-item"
+                        class:read={message.read}
+                        class:active={emailStore.selectedMessage?.id === message.id}
+                        class:cursor={item.index === emailStore.listCursorIndex}
+                        onclick={() => { emailStore.listCursorIndex = item.index; emailStore.loadMessageDetail(message.id); }}
+                    >
+                        <div class="message-header">
+                            <span class="sender">{truncate(formatSender(message.from), 25)}</span>
+                            <span class="date">{formatDate(message.date)}</span>
+                        </div>
+                        <div class="message-subject">{message.subject || 'No Subject'}</div>
+                        <div class="message-snippet">
+                            {message.snippet ? truncate(message.snippet, 80) : 'No preview available'}
+                        </div>
+                    </button>
+                    <button
+                        class="star-btn"
+                        class:starred={message.starred}
+                        title={message.starred ? "Unstar" : "Star"}
+                        onclick={(e) => { e.stopPropagation(); emailStore.toggleStar(message.id); }}
+                    >
+                        {message.starred ? '★' : '☆'}
+                    </button>
+                </div>
+            {/if}
         {/each}
+
+        <!-- Bottom spacer to fill remaining space -->
+        <div style="height: {vsState.offsetBottom}px"></div>
     </div>
 
     {#if emailStore.hasMore}
@@ -92,6 +139,7 @@
     }
 
     .message-list {
+        position: relative;
         flex: 1;
         min-height: 0;
         overflow-y: auto;
@@ -121,7 +169,6 @@
         width: 100%;
         text-align: left;
         padding: 0.875rem 1rem;
-        margin-bottom: 4px;
         background: #111827;
         border: 1px solid #1f2937;
         border-radius: 8px;
@@ -130,6 +177,9 @@
         font-family: inherit;
         font-size: 0.875rem;
         color: #e5e7eb;
+        /* Virtual scroll compatibility: fixed height, no margin */
+        height: 74px;
+        box-sizing: border-box;
     }
 
     .message-item:hover {
