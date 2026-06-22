@@ -56,6 +56,7 @@ pub struct ListMessagesArgs {
     pub page_token: Option<String>,
     pub max_results: Option<u32>,
     pub label_id: Option<String>,
+    pub query: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -422,11 +423,12 @@ pub async fn list_messages(
     page_token: Option<String>,
     max_results: Option<u32>,
     label_id: Option<String>,
+    query: Option<String>,
 ) -> Result<ListMessagesResponse, AppError> {
     let max_results = max_results.unwrap_or(20);
     println!(
-        "[gmail] list_messages: account_id={}, page_token={:?}, max_results={}, label_id={:?}",
-        account_id, page_token, max_results, label_id
+        "[gmail] list_messages: account_id={}, page_token={:?}, max_results={}, label_id={:?}, query={:?}",
+        account_id, page_token, max_results, label_id, query
     );
 
     // keyringからアクセストークンを直接取得（事前tokeninfoチェックは行わない）
@@ -436,7 +438,7 @@ pub async fn list_messages(
 
     let client = Client::new();
 
-    let do_list_request = |token: &str, page_token: Option<&str>, label_id: Option<&str>| {
+    let do_list_request = |token: &str, page_token: Option<&str>, label_id: Option<&str>, query: Option<&str>| {
         let client = &client;
         let max_results = max_results;
         let mut request = client
@@ -453,10 +455,15 @@ pub async fn list_messages(
                 request = request.query(&[("labelIds", lid)]);
             }
         }
+        if let Some(q) = query {
+            if !q.is_empty() {
+                request = request.query(&[("q", q)]);
+            }
+        }
         request.send()
     };
 
-    let mut response = do_list_request(&token, page_token.as_deref(), label_id.as_deref())
+    let mut response = do_list_request(&token, page_token.as_deref(), label_id.as_deref(), query.as_deref())
         .await
         .map_err(AppError::from)?;
 
@@ -469,7 +476,7 @@ pub async fn list_messages(
         let new_token = refresh_access_token_for(&account_id).await?;
         // 新しいトークンは keyring に再保存済み（refresh_access_token_for 内で保存される）
         let _ = app.emit("token-refreshed", &account_id);
-        response = do_list_request(&new_token, page_token.as_deref(), label_id.as_deref())
+        response = do_list_request(&new_token, page_token.as_deref(), label_id.as_deref(), query.as_deref())
             .await
             .map_err(AppError::from)?;
         if response.status() == 401 {
@@ -1730,5 +1737,30 @@ mod tests {
     fn generate_boundary_is_valid() {
         let boundary = generate_boundary();
         assert!(boundary.starts_with("----=_Part_"));
+    }
+
+    // --- ListMessagesArgs serialization tests ---
+    #[test]
+    fn list_messages_args_with_query_serializes() {
+        let args = ListMessagesArgs {
+            account_id: "user@test.com".to_string(),
+            page_token: None,
+            max_results: Some(20),
+            label_id: None,
+            query: Some("from:boss important".to_string()),
+        };
+        let json = serde_json::to_value(&args).unwrap();
+        assert_eq!(json["accountId"], "user@test.com");
+        assert_eq!(json["query"], "from:boss important");
+        assert_eq!(json["maxResults"], 20);
+    }
+
+    #[test]
+    fn list_messages_args_without_query_defaults() {
+        let args = ListMessagesArgs::default();
+        assert!(args.query.is_none());
+        let json = serde_json::to_value(&args).unwrap();
+        // Default values are omitted due to #[serde(default)]
+        assert!(json.get("query").is_none() || json["query"].is_null());
     }
 }

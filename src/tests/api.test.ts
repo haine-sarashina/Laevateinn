@@ -113,6 +113,26 @@ describe('api.listMessages', () => {
       expect.objectContaining({ labelId: null, pageToken: null })
     );
   });
+
+  it('passes query parameter to backend when provided', async () => {
+    const api = await import('$lib/api');
+    mockedInvoke.mockResolvedValueOnce({ messages: [], nextPageToken: null });
+    await api.listMessages('user@test.com', undefined, undefined, 20, 'from:boss important');
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      'list_messages',
+      expect.objectContaining({ query: 'from:boss important' })
+    );
+  });
+
+  it('sends null for query when not provided', async () => {
+    const api = await import('$lib/api');
+    mockedInvoke.mockResolvedValueOnce({ messages: [], nextPageToken: null });
+    await api.listMessages('user@test.com');
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      'list_messages',
+      expect.objectContaining({ query: null })
+    );
+  });
 });
 
 describe('api.getMessageDetails', () => {

@@ -34,6 +34,28 @@
     {:else}
         <div class="email-container">
             <div class="list-panel">
+                <div class="search-bar">
+                    <input
+                        id="email-search-input"
+                        type="text"
+                        placeholder="Search emails..."
+                        bind:value={emailStore.searchQuery}
+                        onkeydown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                emailStore.searchMessages(emailStore.searchQuery);
+                            }
+                        }}
+                    />
+                    {#if emailStore.isSearching || emailStore.searchQuery}
+                        <button
+                            class="search-clear-btn"
+                            onclick={() => emailStore.clearSearch()}
+                            aria-label="Clear search"
+                        >&times;</button>
+                    {/if}
+                </div>
+
                 {#if emailStore.error && !emailStore.isAuthErrorFlag}
                     <div class="error-banner">
                         <span class="error-message">{emailStore.error}</span>
@@ -244,5 +266,55 @@
 
     .detail-error-btn:hover {
         background: #1d4ed8;
+    }
+
+    // --- Search bar ---
+    .search-bar {
+        display: flex;
+        align-items: center;
+        padding: 0.5rem;
+        border-bottom: 1px solid #374151;
+        flex-shrink: 0;
+        background: #111827;
+    }
+
+    .search-bar input {
+        flex: 1;
+        padding: 0.5rem 0.75rem;
+        background: #1f2937;
+        border: 1px solid #374151;
+        border-radius: 6px;
+        color: #f3f4f6;
+        font-size: 0.875rem;
+        font-family: inherit;
+        outline: none;
+        transition: border-color 0.15s;
+    }
+
+    .search-bar input:focus {
+        border-color: #4285f4;
+        box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
+    }
+
+    .search-bar input::placeholder {
+        color: #6b7280;
+    }
+
+    .search-clear-btn {
+        margin-left: 0.375rem;
+        padding: 0.375rem 0.5rem;
+        background: #374151;
+        border: none;
+        border-radius: 4px;
+        color: #9ca3af;
+        font-size: 1.125rem;
+        line-height: 1;
+        cursor: pointer;
+        transition: background-color 0.15s;
+    }
+
+    .search-clear-btn:hover {
+        background: #4b5563;
+        color: #f3f4f6;
     }
 </style>

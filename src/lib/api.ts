@@ -119,12 +119,14 @@ export async function listMessages(
     labelId?: string,
     pageToken?: string,
     maxResults = 20,
+    query?: string,
 ): Promise<GmailListResponse> {
     return await safeInvoke<GmailListResponse>('list_messages', {
         accountId,
         labelId: labelId || null,
         pageToken: pageToken || null,
         maxResults: maxResults,
+        query: query || null,
     });
 }
 

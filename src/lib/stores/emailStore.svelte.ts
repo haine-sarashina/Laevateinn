@@ -110,6 +110,10 @@ class EmailStore {
     labels = $state<GmailLabel[]>([]);
     currentLabelId = $state<string | null>(null);
 
+    // Search support
+    searchQuery = $state<string>('');
+    isSearching = $state(false);
+
     /** Compose state saved per account ID to survive account switches. */
     #composeStatePerAccount = new Map<string, SavedComposeState>();
 
@@ -186,7 +190,7 @@ class EmailStore {
         await this.refresh();
     }
 
-    async loadMessages(refresh = false, explicitPageToken?: string) {
+    async loadMessages(refresh = false, explicitPageToken?: string, searchQueryOverride?: string) {
         if (refresh) {
             this._cache.clear();
             this._syncMessages();
@@ -204,7 +208,8 @@ class EmailStore {
                 return;
             }
 
-            const response: GmailListResponse = await listMessages(accountId, this.currentLabelId ?? undefined, explicitPageToken, this.maxResults);
+            const queryToUse = searchQueryOverride ?? (this.isSearching ? this.searchQuery : undefined);
+            const response: GmailListResponse = await listMessages(accountId, this.currentLabelId ?? undefined, explicitPageToken, this.maxResults, queryToUse);
             const newMessages = response.messages || [];
             const tokenFromResponse = response.nextPageToken || null;
 
@@ -401,6 +406,8 @@ class EmailStore {
         this.currentLabelId = null;
         this.labels = [];
         this.listCursorIndex = -1;
+        this.searchQuery = '';
+        this.isSearching = false;
         this.isComposing = false;
         this.composeMode = 'new';
         this.composeTo = '';
@@ -647,6 +654,49 @@ class EmailStore {
             if (!this.isAuthErrorFlag) {
                 errorStore.set(this.error);
             }
+        }
+    }
+
+    /**
+     * Search messages using the Gmail API query language.
+     * Resets pagination and cache before fetching results.
+     */
+    async searchMessages(query: string): Promise<void> {
+        if (!query.trim()) {
+            // Empty query — clear search instead
+            await this.clearSearch();
+            return;
+        }
+        this.searchQuery = query.trim();
+        this.isSearching = true;
+        // Reset pagination so search starts from the first page
+        this.nextPageToken = null;
+        this.hasMore = true;
+        await this.loadMessages(true);
+    }
+
+    /**
+     * Clear the active search and restore the normal inbox view.
+     */
+    async clearSearch(): Promise<void> {
+        this.searchQuery = '';
+        this.isSearching = false;
+        this.nextPageToken = null;
+        this.hasMore = true;
+        this._cache.clear();
+        this._syncMessages();
+        await this.loadMessages(true);
+    }
+
+    /**
+     * Focus the search bar input element by ID.
+     * Called from the keyboard shortcut handler.
+     */
+    focusSearchBar(): void {
+        const el = document.getElementById('email-search-input');
+        if (el) {
+            el.focus();
+            (el as HTMLInputElement).select();
         }
     }
 }

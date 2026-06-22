@@ -98,6 +98,13 @@ export function useShortcuts(
     const hasAccount = (): boolean => !!authStore.activeAccountId;
 
     // -- Always available (when logged in) --
+    // Press "/" to focus the search bar
+    handler.add({
+        key: '/',
+        when: () => hasAccount() && !emailStore.isComposing,
+        action: () => emailStore.focusSearchBar(),
+    });
+
     handler.add({
         key: 'c',
         when: () => hasAccount() && !emailStore.isComposing,
