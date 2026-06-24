@@ -114,6 +114,10 @@ class EmailStore {
     searchQuery = $state<string>('');
     isSearching = $state(false);
 
+    // Search history (most recent first, max 10 entries)
+    searchHistory = $state<string[]>([]);
+    readonly #maxSearchHistory = 10;
+
     /** Compose state saved per account ID to survive account switches. */
     #composeStatePerAccount = new Map<string, SavedComposeState>();
 
@@ -667,8 +671,11 @@ class EmailStore {
             await this.clearSearch();
             return;
         }
-        this.searchQuery = query.trim();
+        const trimmed = query.trim();
+        this.searchQuery = trimmed;
         this.isSearching = true;
+        // Add to history (deduplicate, most recent first)
+        this.#addToHistory(trimmed);
         // Reset pagination so search starts from the first page
         this.nextPageToken = null;
         this.hasMore = true;
@@ -697,6 +704,36 @@ class EmailStore {
         if (el) {
             el.focus();
             (el as HTMLInputElement).select();
+        }
+    }
+
+    /** Internal: add a query to search history, deduplicated, capped at #maxSearchHistory. */
+    #addToHistory(query: string): void {
+        const idx = this.searchHistory.indexOf(query);
+        if (idx > -1) {
+            // Remove duplicate so it can be re-added at the front
+            this.searchHistory.splice(idx, 1);
+        }
+        this.searchHistory.unshift(query);
+        if (this.searchHistory.length > this.#maxSearchHistory) {
+            this.searchHistory = this.searchHistory.slice(0, this.#maxSearchHistory);
+        }
+    }
+
+    /** Public: manually add a query to search history. */
+    addToSearchHistory(query: string): void {
+        this.#addToHistory(query.trim());
+    }
+
+    /** Public: clear all search history entries. */
+    clearSearchHistory(): void {
+        this.searchHistory = [];
+    }
+
+    /** Public: remove a single entry from search history by index. */
+    removeSearchHistoryEntry(index: number): void {
+        if (index >= 0 && index < this.searchHistory.length) {
+            this.searchHistory.splice(index, 1);
         }
     }
 }

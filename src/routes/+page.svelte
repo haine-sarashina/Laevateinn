@@ -6,6 +6,17 @@
     import ComposeEmail from "$lib/components/ComposeEmail.svelte";
     import { safeInvoke } from "$lib/api";
     import { openUrl } from "@tauri-apps/plugin-opener";
+    import { buildSearchQuery } from "$lib/searchOperators";
+
+    // --- Advanced search panel state ---
+    let showAdvancedSearch = false;
+    let advFrom = '';
+    let advTo = '';
+    let advSubject = '';
+    let advHasAttachment = false;
+    let advStarred = false;
+    let advAfterDate = '';
+    let advBeforeDate = '';
 
     // Initialization is handled by +layout.svelte onMount.
     // This component only renders the mail UI; no duplicate API calls needed.
@@ -54,7 +65,68 @@
                             aria-label="Clear search"
                         >&times;</button>
                     {/if}
+                    <button
+                        class="search-advanced-btn"
+                        class:active={showAdvancedSearch}
+                        onclick={() => showAdvancedSearch = !showAdvancedSearch}
+                        aria-label="Toggle advanced search"
+                        title="Advanced search"
+                    >⚙</button>
                 </div>
+
+                {#if showAdvancedSearch}
+                <div class="advanced-search-panel">
+                    <div class="adv-row">
+                        <label for="adv-from">From</label>
+                        <input id="adv-from" type="text" bind:value={advFrom} placeholder="Sender" />
+                    </div>
+                    <div class="adv-row">
+                        <label for="adv-to">To</label>
+                        <input id="adv-to" type="text" bind:value={advTo} placeholder="Recipient" />
+                    </div>
+                    <div class="adv-row">
+                        <label for="adv-subject">Subject</label>
+                        <input id="adv-subject" type="text" bind:value={advSubject} placeholder="Keywords" />
+                    </div>
+                    <div class="adv-row">
+                        <label for="adv-after">After</label>
+                        <input id="adv-after" type="date" bind:value={advAfterDate} />
+                    </div>
+                    <div class="adv-row">
+                        <label for="adv-before">Before</label>
+                        <input id="adv-before" type="date" bind:value={advBeforeDate} />
+                    </div>
+                    <div class="adv-row adv-checkboxes">
+                        <label><input type="checkbox" bind:checked={advHasAttachment} /> Attachments</label>
+                        <label><input type="checkbox" bind:checked={advStarred} /> Starred</label>
+                    </div>
+                    <div class="adv-actions">
+                        <button class="adv-search-btn" onclick={() => {
+                            const q = buildSearchQuery({
+                                from: advFrom,
+                                to: advTo,
+                                subject: advSubject,
+                                hasAttachment: advHasAttachment,
+                                starred: advStarred,
+                                afterDate: advAfterDate,
+                                beforeDate: advBeforeDate,
+                            });
+                            emailStore.searchMessages(q);
+                            showAdvancedSearch = false;
+                        }}>Search</button>
+                        <button class="adv-clear-btn" onclick={() => {
+                            advFrom = '';
+                            advTo = '';
+                            advSubject = '';
+                            advHasAttachment = false;
+                            advStarred = false;
+                            advAfterDate = '';
+                            advBeforeDate = '';
+                            showAdvancedSearch = false;
+                        }}>Clear</button>
+                    </div>
+                </div>
+                {/if}
 
                 {#if emailStore.error && !emailStore.isAuthErrorFlag}
                     <div class="error-banner">
@@ -268,7 +340,7 @@
         background: #1d4ed8;
     }
 
-    // --- Search bar ---
+    /* --- Search bar --- */
     .search-bar {
         display: flex;
         align-items: center;
@@ -316,5 +388,127 @@
     .search-clear-btn:hover {
         background: #4b5563;
         color: #f3f4f6;
+    }
+
+    .search-advanced-btn {
+        margin-left: 0.375rem;
+        padding: 0.375rem 0.5rem;
+        background: #374151;
+        border: none;
+        border-radius: 4px;
+        color: #9ca3af;
+        font-size: 1rem;
+        line-height: 1;
+        cursor: pointer;
+        transition: background-color 0.15s, color 0.15s;
+    }
+
+    .search-advanced-btn:hover {
+        background: #4b5563;
+        color: #f3f4f6;
+    }
+
+    .search-advanced-btn.active {
+        background: #4285f4;
+        color: white;
+    }
+
+    /* --- Advanced search panel --- */
+    .advanced-search-panel {
+        padding: 0.75rem;
+        background: #111827;
+        border-bottom: 1px solid #374151;
+        flex-shrink: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .adv-row {
+        display: flex;
+        align-items: center;
+        gap: 0.375rem;
+        flex: 1 1 auto;
+        min-width: 180px;
+    }
+
+    .adv-row label {
+        font-size: 0.75rem;
+        color: #9ca3af;
+        min-width: 4em;
+        text-align: right;
+    }
+
+    .adv-row input[type="text"],
+    .adv-row input[type="date"] {
+        flex: 1;
+        padding: 0.3rem 0.5rem;
+        background: #1f2937;
+        border: 1px solid #374151;
+        border-radius: 4px;
+        color: #f3f4f6;
+        font-size: 0.8125rem;
+        font-family: inherit;
+        outline: none;
+    }
+
+    .adv-row input:focus {
+        border-color: #4285f4;
+    }
+
+    .adv-checkboxes {
+        flex: 1 1 100%;
+        justify-content: flex-start;
+        gap: 1.25rem;
+    }
+
+    .adv-checkboxes label {
+        display: flex;
+        align-items: center;
+        gap: 0.375rem;
+        min-width: auto;
+        text-align: left;
+        font-size: 0.8125rem;
+        color: #d1d5db;
+        cursor: pointer;
+    }
+
+    .adv-actions {
+        flex-basis: 100%;
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        margin-top: 0.25rem;
+    }
+
+    .adv-search-btn {
+        padding: 0.375rem 1rem;
+        background: #4285f4;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.8125rem;
+        font-family: inherit;
+        font-weight: 500;
+    }
+
+    .adv-search-btn:hover {
+        background: #357ae8;
+    }
+
+    .adv-clear-btn {
+        padding: 0.375rem 1rem;
+        background: #374151;
+        color: #d1d5db;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.8125rem;
+        font-family: inherit;
+    }
+
+    .adv-clear-btn:hover {
+        background: #4b5563;
     }
 </style>
