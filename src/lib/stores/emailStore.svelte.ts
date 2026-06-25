@@ -5,6 +5,8 @@ import { authStore } from "./authStore.svelte";
 import { groupMessagesByThread } from "$lib/threads";
 import type { ThreadSummary } from "$lib/threads";
 import { LRUMessageCache } from "./lruCache";
+import type { SuggestionItem } from "$lib/searchSuggestions";
+import { generateSuggestions } from "$lib/searchSuggestions";
 
 export interface EmailMessage {
     id: string;
@@ -117,6 +119,11 @@ class EmailStore {
     // Search history (most recent first, max 10 entries)
     searchHistory = $state<string[]>([]);
     readonly #maxSearchHistory = 10;
+
+    // Search suggestions state
+    showSuggestions = $state(false);
+    suggestions = $state<SuggestionItem[]>([]);
+    suggestionCursorIndex = $state<number>(-1);
 
     /** Compose state saved per account ID to survive account switches. */
     #composeStatePerAccount = new Map<string, SavedComposeState>();
@@ -735,6 +742,102 @@ class EmailStore {
         if (index >= 0 && index < this.searchHistory.length) {
             this.searchHistory.splice(index, 1);
         }
+    }
+
+    /**
+     * Update search suggestions based on current input.
+     * Uses generateSuggestions from searchSuggestions.ts to produce history/operator/sender suggestions.
+     */
+    updateSuggestions(input: string): void {
+        const trimmed = input.trim();
+        if (!trimmed) {
+            this.showSuggestions = false;
+            this.suggestions = [];
+            this.suggestionCursorIndex = -1;
+            return;
+        }
+
+        const msgList = this.messages.map(m => ({ from: m.from }));
+        const results = generateSuggestions(trimmed, this.searchHistory, msgList);
+
+        this.suggestions = results;
+        this.showSuggestions = results.length > 0;
+        this.suggestionCursorIndex = -1;
+    }
+
+    /**
+     * Clear suggestions and hide the dropdown.
+     */
+    clearSuggestions(): void {
+        this.showSuggestions = false;
+        this.suggestions = [];
+        this.suggestionCursorIndex = -1;
+    }
+
+    /**
+     * Move the suggestion cursor up or down within the suggestion list.
+     * @param direction - Positive for down, negative for up.
+     */
+    moveSuggestionCursor(direction: number): void {
+        if (!this.showSuggestions || this.suggestions.length === 0) return;
+
+        const max = this.suggestions.length - 1;
+        if (this.suggestionCursorIndex < 0) {
+            // First move: start at top (down) or bottom (up)
+            this.suggestionCursorIndex = direction > 0 ? 0 : max;
+        } else {
+            this.suggestionCursorIndex = Math.max(0, Math.min(max, this.suggestionCursorIndex + direction));
+        }
+    }
+
+    /**
+     * Get the currently selected suggestion text (for cursor navigation).
+     */
+    getSelectedSuggestion(): string | null {
+        if (this.suggestionCursorIndex < 0 || this.suggestionCursorIndex >= this.suggestions.length) {
+            return null;
+        }
+        const item = this.suggestions[this.suggestionCursorIndex];
+        // For operator suggestions, extract the operator prefix (without description)
+        if (item.kind === 'operator' && item.operator) {
+            return item.operator;
+        }
+        return item.text || null;
+    }
+
+    /**
+     * Accept the currently selected suggestion or the first one.
+     */
+    acceptSuggestion(): string | null {
+        if (this.suggestionCursorIndex >= 0 && this.suggestionCursorIndex < this.suggestions.length) {
+            return this.getSelectedSuggestion();
+        }
+        if (this.suggestions.length > 0) {
+            const item = this.suggestions[0];
+            if (item.kind === 'operator' && item.operator) {
+                return item.operator;
+            }
+            return item.text || null;
+        }
+        return null;
+    }
+
+    /**
+     * Select a suggestion by index and apply it to the search query.
+     */
+    selectSuggestion(index: number): void {
+        if (index < 0 || index >= this.suggestions.length) return;
+        const item = this.suggestions[index];
+        if (!item) return;
+
+        // For operator suggestions, set the operator prefix as the query
+        if (item.kind === 'operator' && item.operator) {
+            this.searchQuery = item.operator;
+        } else {
+            this.searchQuery = item.text;
+        }
+
+        this.clearSuggestions();
     }
 }
 

@@ -51,9 +51,33 @@
                         type="text"
                         placeholder="Search emails..."
                         bind:value={emailStore.searchQuery}
+                        oninput={() => emailStore.updateSuggestions(emailStore.searchQuery)}
                         onkeydown={(e) => {
+                            if (emailStore.showSuggestions) {
+                                if (e.key === 'ArrowDown') {
+                                    e.preventDefault();
+                                    emailStore.moveSuggestionCursor(1);
+                                    return;
+                                }
+                                if (e.key === 'ArrowUp') {
+                                    e.preventDefault();
+                                    emailStore.moveSuggestionCursor(-1);
+                                    return;
+                                }
+                                if (e.key === 'Escape') {
+                                    emailStore.clearSuggestions();
+                                    return;
+                                }
+                            }
                             if (e.key === 'Enter') {
                                 e.preventDefault();
+                                if (emailStore.showSuggestions) {
+                                    const selected = emailStore.acceptSuggestion();
+                                    if (selected) {
+                                        emailStore.searchQuery = selected;
+                                        emailStore.clearSuggestions();
+                                    }
+                                }
                                 emailStore.searchMessages(emailStore.searchQuery);
                             }
                         }}
@@ -126,6 +150,26 @@
                         }}>Clear</button>
                     </div>
                 </div>
+                {/if}
+
+                <!-- Search suggestions dropdown -->
+                {#if emailStore.showSuggestions && emailStore.suggestions.length > 0}
+                <ul class="suggestions-dropdown" role="listbox">
+                    {#each emailStore.suggestions as suggestion, i}
+                        <li
+                            class="suggestion-item"
+                            class:active={i === emailStore.suggestionCursorIndex}
+                            role="option"
+                            onclick={() => emailStore.selectSuggestion(i)}
+                            onmouseenter={() => emailStore.suggestionCursorIndex = i}
+                        >
+                            <span class="suggestion-text">{suggestion.text}</span>
+                            {#if suggestion.kind === 'operator'}
+                                <span class="suggestion-description">{suggestion.description}</span>
+                            {/if}
+                        </li>
+                    {/each}
+                </ul>
                 {/if}
 
                 {#if emailStore.error && !emailStore.isAuthErrorFlag}
@@ -510,5 +554,67 @@
 
     .adv-clear-btn:hover {
         background: #4b5563;
+    }
+
+    /* --- Search suggestions dropdown --- */
+    .suggestions-dropdown {
+        list-style: none;
+        margin: 0;
+        padding: 0.25rem 0;
+        background: #1f2937;
+        border: 1px solid #374151;
+        border-radius: 6px;
+        max-height: 240px;
+        overflow-y: auto;
+        position: absolute;
+        top: 100%;
+        left: 0.5rem;
+        right: 0.5rem;
+        z-index: 50;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    }
+
+    .suggestion-item {
+        padding: 0.5rem 0.75rem;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        gap: 0.125rem;
+        transition: background-color 0.1s;
+    }
+
+    .suggestion-item:hover,
+    .suggestion-item.active {
+        background: #374151;
+    }
+
+    .suggestion-text {
+        color: #f3f4f6;
+        font-size: 0.875rem;
+        font-family: inherit;
+    }
+
+    .suggestion-description {
+        color: #6b7280;
+        font-size: 0.75rem;
+    }
+
+    /* Scrollbar styling for dropdown */
+    .suggestions-dropdown::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .suggestions-dropdown::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .suggestions-dropdown::-webkit-scrollbar-thumb {
+        background-color: #4b5563;
+        border-radius: 3px;
+    }
+
+    /* Make list-panel relative for absolute positioning of dropdown */
+    .list-panel {
+        position: relative;
     }
 </style>
