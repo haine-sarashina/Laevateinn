@@ -1,6 +1,9 @@
 <script lang="ts">
     import { emailStore } from "$lib/stores/emailStore.svelte";
 
+    // Guard: this component is only rendered when selectedMessage exists (see +page.svelte)
+    const msg = emailStore.selectedMessage!;
+
     let scrollContainer: HTMLElement | null = $state.raw(null);
 
     $effect(() => {
@@ -72,10 +75,10 @@
             <div class="action-buttons">
                 <button
                     class="action-btn star-action"
-                    title={emailStore.getMessage(emailStore.selectedMessage.id)?.starred ? "Unstar" : "Star"}
-                    onclick={() => emailStore.toggleStar(emailStore.selectedMessage.id)}
+                    title={emailStore.getMessage(msg.id)?.starred ? "Unstar" : "Star"}
+                    onclick={() => { const msg = emailStore.selectedMessage; if (msg) emailStore.toggleStar(msg.id); }}
                 >
-                    {emailStore.getMessage(emailStore.selectedMessage.id)?.starred ? '★ Starred' : '☆ Star'}
+                    {emailStore.getMessage(msg.id)?.starred ? '★ Starred' : '☆ Star'}
                 </button>
                 <button
                     class="action-btn reply-action"
@@ -101,21 +104,21 @@
                 <button
                     class="action-btn archive-action"
                     title="Archive"
-                    onclick={() => { emailStore.archiveMessage(emailStore.selectedMessage.id); }}
+                    onclick={() => { if (msg) emailStore.archiveMessage(msg.id); }}
                 >
                     📦 Archive
                 </button>
                 <button
                     class="action-btn trash-action"
                     title="Delete"
-                    onclick={() => { emailStore.trashMessage(emailStore.selectedMessage.id); }}
+                    onclick={() => { if (msg) emailStore.trashMessage(msg.id); }}
                 >
                     🗑 Delete
                 </button>
                 <button
                     class="action-btn spam-action"
                     title="Report Spam"
-                    onclick={() => { emailStore.spamMessage(emailStore.selectedMessage.id); }}
+                    onclick={() => { if (msg) emailStore.spamMessage(msg.id); }}
                 >
                     ⚠ Spam
                 </button>
@@ -123,32 +126,30 @@
         </div>
 
         <div class="detail-content" bind:this={scrollContainer}>
-            <h1 class="detail-subject">{emailStore.selectedMessage.subject}</h1>
+            <h1 class="detail-subject">{msg.subject}</h1>
 
             <div class="detail-meta">
                 <div class="meta-sender">
-                    {#if emailStore.selectedMessage}
-                        {@const sender = formatSender(emailStore.selectedMessage.from)}
-                        {#if sender.name}
-                            <span class="sender-name">{sender.name}</span>
-                            <span class="sender-email">&lt;{sender.email}&gt;</span>
-                        {:else}
-                            <span class="sender-email">&lt;{sender.email}&gt;</span>
-                        {/if}
+                    {@const sender = formatSender(msg.from)}
+                    {#if sender.name}
+                        <span class="sender-name">{sender.name}</span>
+                        <span class="sender-email">&lt;{sender.email}&gt;</span>
+                    {:else}
+                        <span class="sender-email">&lt;{sender.email}&gt;</span>
                     {/if}
                 </div>
-                <div class="meta-date">{formatDate(emailStore.selectedMessage.date)}</div>
+                <div class="meta-date">{formatDate(msg.date)}</div>
             </div>
 
             <div class="detail-snippet">
-                <strong>Snippet:</strong> {emailStore.selectedMessage.snippet}
+                <strong>Snippet:</strong> {msg.snippet}
             </div>
 
-            {#if emailStore.selectedMessage.attachments && emailStore.selectedMessage.attachments.length > 0}
+            {#if msg.attachments && msg.attachments.length > 0}
                 <div class="attachments-section">
-                    <h3>Attachments ({emailStore.selectedMessage.attachments.length})</h3>
+                    <h3>Attachments ({msg.attachments.length})</h3>
                     <div class="attachments-list">
-                        {#each emailStore.selectedMessage.attachments as att (att.filename)}
+                        {#each msg.attachments as att (att.filename)}
                             <div class="attachment-item" onclick={() => downloadAttachment(att)}>
                                 <span class="attachment-icon">{getFileIcon(att.mimeType)}</span>
                                 <div class="attachment-info">

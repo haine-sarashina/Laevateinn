@@ -1,5 +1,30 @@
-import type { EmailStore } from "$lib/stores/emailStore.svelte";
-import type { AuthStore } from "$lib/stores/authStore.svelte";
+import type { GmailMessageDetail } from "$lib/api";
+
+// Minimal interfaces for the stores (only what keyboardShortcuts uses)
+// Avoid importing non-exported class types from Svelte modules
+interface EmailStoreLike {
+    activeAccountId: string | null;
+    isComposing: boolean;
+    selectedMessage: GmailMessageDetail | null;
+    messages: ReadonlyArray<{ id: string }>;
+    listCursorIndex: number;
+    focusSearchBar(): void;
+    startComposing(): void;
+    refresh(): Promise<void>;
+    replyToMessage(): void;
+    replyAllToMessage(): void;
+    forwardMessage(): void;
+    trashMessage(id: string): Promise<void>;
+    toggleStar(id: string): Promise<void>;
+    moveCursorDown(): void;
+    moveCursorUp(): void;
+    openCursorMessage(): void;
+    cancelComposing(): void;
+}
+
+interface AuthStoreLike {
+    activeAccountId: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -237,3 +262,6 @@ export function useShortcuts(
 
 // Export for testing
 export { ShortcutHandler, type Shortcut };
+
+// Re-export the interfaces for external use (backward compatibility)
+export type { EmailStoreLike as EmailStore, AuthStoreLike as AuthStore };
