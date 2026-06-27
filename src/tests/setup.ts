@@ -17,6 +17,20 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
 }));
 
 /**
+ * Mock @tauri-apps/plugin-notification for desktop notifications.
+ */
+vi.mock('@tauri-apps/plugin-notification', () => {
+  const Notification = vi.fn().mockImplementation(() => ({
+    send: vi.fn(() => Promise.resolve()),
+  }));
+  return {
+    Notification,
+    isPermissionGranted: vi.fn(() => Promise.resolve(true)),
+    requestPermission: vi.fn(() => Promise.resolve('granted')),
+  };
+});
+
+/**
  * Mock @tauri-apps/api/window getCurrentWindow and related.
  */
 vi.mock('@tauri-apps/api/window', () => ({

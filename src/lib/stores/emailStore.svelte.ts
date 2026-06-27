@@ -1,4 +1,4 @@
-import { listMessages, getMessageDetails, listLabels, modifyLabels, type SendAttachment } from "$lib/api";
+import { listMessages, getMessageDetails, listLabels, modifyLabels, sendDesktopNotification, type SendAttachment } from "$lib/api";
 import type { GmailMessageDetail, GmailListResponse, GmailLabel, GmailLabelsResponse, ModifyLabelsResult } from "$lib/api";
 import { errorStore } from "./errorStore.svelte";
 import { authStore } from "./authStore.svelte";
@@ -128,6 +128,9 @@ class EmailStore {
     /** Compose state saved per account ID to survive account switches. */
     #composeStatePerAccount = new Map<string, SavedComposeState>();
 
+    /** Message IDs that have already triggered a notification (prevents duplicates). */
+    #notifiedIds = new Set<string>();
+
     /** Register with authStore to save/restore compose state on account switch. */
     #saveComposeBeforeSwitch(): void {
         const accountId = authStore.activeAccountId;
@@ -201,7 +204,7 @@ class EmailStore {
         await this.refresh();
     }
 
-    async loadMessages(refresh = false, explicitPageToken?: string, searchQueryOverride?: string) {
+    async loadMessages(refresh = false, explicitPageToken?: string, searchQueryOverride?: string, silent = false) {
         if (refresh) {
             this._cache.clear();
             this._syncMessages();
@@ -257,6 +260,19 @@ class EmailStore {
                     this._syncMessages();
                     this.nextPageToken = tokenFromResponse;
                     this.hasMore = tokenFromResponse !== null;
+
+                    // Desktop notification for genuinely new messages (not on refresh/search/silent)
+                    if (!silent && !this.isSearching && authStore.activeAccountId) {
+                        const unreadNew = unique.filter(m => !this.#notifiedIds.has(m.id));
+                        if (unreadNew.length > 0) {
+                            const firstSender = unreadNew[0].from.split('<')[0].trim() || unreadNew[0].from;
+                            const title = unreadNew.length === 1
+                                ? '1 New Message'
+                                : `${unreadNew.length} New Messages`;
+                            sendDesktopNotification(title, firstSender);
+                            unreadNew.forEach(m => this.#notifiedIds.add(m.id));
+                        }
+                    }
                 }
             }
         } catch (e) {
@@ -337,7 +353,7 @@ class EmailStore {
         }
         this.isMoreLoading = true;
         try {
-            await this.loadMessages(false, this.nextPageToken);
+            await this.loadMessages(false, this.nextPageToken, undefined, true);
         } finally {
             this.isMoreLoading = false;
         }
@@ -426,6 +442,7 @@ class EmailStore {
         this.composeSubject = '';
         this.composeBody = '';
         this.composeAttachments = [];
+        this.#notifiedIds.clear();
     }
 
     async refresh() {

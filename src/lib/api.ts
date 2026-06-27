@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { Notification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { errorStore } from "./stores/errorStore.svelte";
 
 const COMMAND_TIMEOUT_MS = 60_000;
@@ -197,4 +198,25 @@ export async function modifyLabels(
         addLabelIds: addLabelIds || [],
         removeLabelIds: removeLabelIds || [],
     });
+}
+
+/**
+ * Sends a desktop notification via the Tauri Notification API.
+ * Requests permission if not already granted.
+ * Errors are caught and stored in errorStore (non-fatal).
+ */
+export async function sendDesktopNotification(title: string, body: string): Promise<void> {
+    try {
+        let granted = await isPermissionGranted();
+        if (!granted) {
+            const perm = await requestPermission();
+            granted = perm === 'granted';
+        }
+        if (!granted) return;
+
+        const notification = new Notification({ title, body });
+        await notification.send();
+    } catch (e) {
+        errorStore.set(e);
+    }
 }
