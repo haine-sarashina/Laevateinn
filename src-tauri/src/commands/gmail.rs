@@ -997,6 +997,7 @@ pub async fn send_email(
     cc: Option<String>,
     bcc: Option<String>,
     attachments: Vec<SendAttachment>,
+    scheduled_send_time_ms: Option<u64>,
 ) -> Result<(), AppError> {
     let client = Client::new();
     let url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
@@ -1030,18 +1031,25 @@ pub async fn send_email(
         )
     };
 
-    println!(
-        "[gmail] send_email: account_id={}, has_attachments={}",
-        account_id,
-        !attachments.is_empty()
-    );
-
     let raw_encoded = base64::Engine::encode(
         &base64::engine::general_purpose::URL_SAFE_NO_PAD,
         raw.as_bytes(),
     );
 
-    let payload = serde_json::json!({ "raw": raw_encoded });
+    // scheduled_send_time_ms が指定されていれば Gmail API に scheduledSendTimestamp を設定する
+    // Gmail API は UNIX epoch 秒を要求するため、ミリ秒→秒に変換する
+    let payload = if let Some(ts_ms) = scheduled_send_time_ms {
+        let ts_secs = ts_ms / 1000;
+        serde_json::json!({ "raw": raw_encoded, "scheduledSendTimestamp": ts_secs })
+    } else {
+        serde_json::json!({ "raw": raw_encoded })
+    };
+
+    println!(
+        "[gmail] send_email: account_id={}, scheduled={}",
+        account_id,
+        scheduled_send_time_ms.is_some()
+    );
 
     let mut response = client
         .post(url)

@@ -11,6 +11,25 @@
     let body = $state(emailStore.composeBody);
     let isSending = $state(false);
     let showCc = $state(Boolean(emailStore.composeCc));
+    let scheduleSend = $state(false);
+    let scheduledDateTime = $state('');
+    let scheduleError = $state('');
+
+    $effect(() => {
+        if (!scheduleSend) {
+            scheduledDateTime = '';
+            scheduleError = '';
+        }
+    });
+
+    $effect(() => {
+        if (scheduleSend && scheduledDateTime && scheduleError) {
+            const dt = new Date(scheduledDateTime);
+            if (!isNaN(dt.getTime()) && dt.getTime() >= Date.now()) {
+                scheduleError = '';
+            }
+        }
+    });
 
     async function handleSend() {
         if (!to.trim()) {
@@ -18,10 +37,30 @@
             return;
         }
 
+        // Validate scheduled send time when checkbox is enabled
+        if (scheduleSend && !scheduledDateTime) {
+            scheduleError = 'Scheduled date and time are required.';
+            return;
+        }
+
+        let scheduledSendTimeMs: number | undefined;
+        if (scheduleSend && scheduledDateTime) {
+            const dt = new Date(scheduledDateTime);
+            if (isNaN(dt.getTime())) {
+                scheduleError = 'Invalid scheduled date and time.';
+                return;
+            }
+            if (dt.getTime() < Date.now()) {
+                scheduleError = 'Scheduled time must be in the future.';
+                return;
+            }
+            scheduledSendTimeMs = dt.getTime();
+        }
+
         isSending = true;
         try {
             const attachments = emailStore.composeAttachments.length > 0 ? emailStore.composeAttachments : undefined;
-            await sendEmail(accountId, to.trim(), subject.trim(), body, cc.trim() || undefined, undefined, attachments);
+            await sendEmail(accountId, to.trim(), subject.trim(), body, cc.trim() || undefined, undefined, attachments, scheduledSendTimeMs);
             // On success, close the compose view
             emailStore.cancelComposing();
         } catch (e) {
@@ -241,12 +280,29 @@
         >
             📎
         </button>
+        <div class="schedule-row">
+            <label class="schedule-checkbox">
+                <input type="checkbox" bind:checked={scheduleSend} disabled={isSending} />
+                <span>Schedule Send</span>
+            </label>
+            {#if scheduleSend}
+                <input
+                    type="datetime-local"
+                    class="schedule-datetime"
+                    bind:value={scheduledDateTime}
+                    disabled={isSending}
+                />
+            {/if}
+        </div>
+        {#if scheduleError}
+            <span class="schedule-error">{scheduleError}</span>
+        {/if}
         <button
             class="send-btn"
             onclick={handleSend}
             disabled={isSending}
         >
-            {isSending ? "Sending..." : "Send"}
+            {isSending ? "Sending..." : (scheduleSend ? "Schedule" : "Send")}
         </button>
         <button
             class="cancel-btn"
@@ -395,10 +451,66 @@
 
     .compose-footer {
         display: flex;
+        flex-wrap: wrap;
+        align-items: center;
         gap: 0.75rem;
         padding: 1rem 1.5rem;
         border-top: 1px solid #374151;
         flex-shrink: 0;
+    }
+
+    .schedule-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex: 1;
+        min-width: 200px;
+    }
+
+    .schedule-checkbox {
+        display: flex;
+        align-items: center;
+        gap: 0.375rem;
+        color: #9ca3af;
+        font-size: 0.8125rem;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+    .schedule-checkbox input[type="checkbox"] {
+        cursor: pointer;
+        accent-color: #4285f4;
+    }
+
+    .schedule-checkbox input[type="checkbox"]:disabled {
+        cursor: not-allowed;
+    }
+
+    .schedule-datetime {
+        padding: 0.375rem 0.5rem;
+        background-color: #111827;
+        border: 1px solid #374151;
+        border-radius: 6px;
+        color: #e5e7eb;
+        font-family: inherit;
+        font-size: 0.8125rem;
+    }
+
+    .schedule-datetime:focus {
+        outline: none;
+        border-color: #4285f4;
+        box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
+    }
+
+    .schedule-datetime::-webkit-calendar-picker-indicator {
+        filter: invert(0.7);
+        cursor: pointer;
+    }
+
+    .schedule-error {
+        width: 100%;
+        color: #ef4444;
+        font-size: 0.8125rem;
     }
 
     .send-btn {

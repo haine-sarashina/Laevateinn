@@ -165,6 +165,7 @@ export async function sendEmail(
     cc?: string,
     bcc?: string,
     attachments?: SendAttachment[],
+    scheduledSendTimeMs?: number,
 ): Promise<void> {
     return await safeInvoke<void>('send_email', {
         accountId,
@@ -174,6 +175,7 @@ export async function sendEmail(
         cc: cc || null,
         bcc: bcc || null,
         attachments: attachments || [],
+        scheduledSendTimeMs: scheduledSendTimeMs ?? null,
     });
 }
 
