@@ -2,6 +2,7 @@
     import { sendEmail, type SendAttachment } from "$lib/api";
     import { emailStore } from "$lib/stores/emailStore.svelte";
     import { errorStore } from "$lib/stores/errorStore.svelte";
+    import UndoSendToast from "../../components/UndoSendToast.svelte";
 
     let { accountId } = $props<{ accountId: string }>();
 
@@ -14,6 +15,10 @@
     let scheduleSend = $state(false);
     let scheduledDateTime = $state('');
     let scheduleError = $state('');
+
+    // Undo-send toast state
+    let showToast = $state(false);
+    let sentComposeData = $state({ to: '', cc: '', subject: '', body: '' });
 
     $effect(() => {
         if (!scheduleSend) {
@@ -29,6 +34,15 @@
                 scheduleError = '';
             }
         }
+    });
+
+    // Cleanup: hide the undo toast and clear any pending child callbacks on destroy.
+    // This prevents stale setTimeout closures in UndoSendToast from firing after
+    // ComposeEmail is destroyed (e.g., forced navigation or external modal close).
+    $effect(() => {
+        return () => {
+            showToast = false;
+        };
     });
 
     async function handleSend() {
@@ -61,8 +75,9 @@
         try {
             const attachments = emailStore.composeAttachments.length > 0 ? emailStore.composeAttachments : undefined;
             await sendEmail(accountId, to.trim(), subject.trim(), body, cc.trim() || undefined, undefined, attachments, scheduledSendTimeMs);
-            // On success, close the compose view
-            emailStore.cancelComposing();
+            // Save compose data for undo support
+            sentComposeData = { to: to.trim(), cc: cc.trim(), subject: subject.trim(), body };
+            showToast = true;
         } catch (e) {
             // safeInvoke already sets errorStore, but ensure it's set
             if (e instanceof Error) {
@@ -78,6 +93,20 @@
     }
 
     function handleCancel() {
+        emailStore.cancelComposing();
+    }
+
+    function handleUndoSend() {
+        showToast = false;
+        // Restore compose data so user can edit before re-sending
+        to = sentComposeData.to;
+        cc = sentComposeData.cc;
+        subject = sentComposeData.subject;
+        body = sentComposeData.body;
+    }
+
+    function handleToastTimeout() {
+        showToast = false;
         emailStore.cancelComposing();
     }
 
@@ -313,6 +342,14 @@
         </button>
     </div>
 </div>
+
+{#if showToast}
+    <UndoSendToast
+        message="Message sent"
+        onUndo={handleUndoSend}
+        onTimeout={handleToastTimeout}
+    />
+{/if}
 
 <style>
     .compose-container {
