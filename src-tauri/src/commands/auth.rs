@@ -34,8 +34,8 @@ pub const SERVICE_NAME: &str = "laevateinn-mail";
 const ACCOUNTS_LIST_KEY: &str = "accounts_list";
 /// Default client credentials (used when env vars are not set)
 const DEFAULT_CLIENT_ID: &str =
-    "199450902096-mbc7ucd7777rtek56gnprac1mcfjobuk.apps.googleusercontent.com";
-const DEFAULT_CLIENT_SECRET: &str = "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";
+    "639129931679-7afpgr8gmghsrvj9bvond5kk7040jikp.apps.googleusercontent.com";
+const DEFAULT_CLIENT_SECRET: &str = "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";
 
 /// Resolve CLIENT_ID from env `GOOGLE_OAUTH_CLIENT_ID`, falling back to default.
 pub static CLIENT_ID: LazyLock<String> = LazyLock::new(|| {
@@ -302,9 +302,11 @@ pub async fn start_auth_flow(app: tauri::AppHandle) -> Result<serde_json::Value,
     }
 
     let auth_endpoint = "https://accounts.google.com/o/oauth2/v2/auth";
-    // mail.google.com = 完全アクセス（送受信・削除・ラベル操作など）
+    // gmail.readonly = 読み取り専用アクセス（メールの閲覧、設定）
+    // gmail.send = メール送信アクセス
+    // gmail.labels = ラベル操作アクセス
     // gmail.settings.basic = 設定系API（Vacation Responder、フィルター管理）
-    let scope = "openid email https://www.googleapis.com/auth/mail.google.com https://www.googleapis.com/auth/gmail.settings.basic";
+    let scope = "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.labels https://www.googleapis.com/auth/gmail.settings.basic";
     let auth_url = format!(
         "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent&code_challenge={}&code_challenge_method=S256&state={}",
         auth_endpoint, CLIENT_ID.as_str(), REDIRECT_URI, scope, challenge, state
