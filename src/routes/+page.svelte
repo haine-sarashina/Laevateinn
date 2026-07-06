@@ -4,24 +4,37 @@
     import EmailList from "$lib/components/EmailList.svelte";
     import EmailDetail from "$lib/components/EmailDetail.svelte";
     import ComposeEmail from "$lib/components/ComposeEmail.svelte";
-    import { safeInvoke } from "$lib/api";
+    import { safeInvoke, startOAuthFlow } from "$lib/api";
     import { openUrl } from "@tauri-apps/plugin-opener";
     import { buildSearchQuery } from "$lib/searchOperators";
 
     // --- Advanced search panel state ---
-    let showAdvancedSearch = false;
-    let advFrom = '';
-    let advTo = '';
-    let advSubject = '';
-    let advHasAttachment = false;
-    let advStarred = false;
-    let advAfterDate = '';
-    let advBeforeDate = '';
+    let showAdvancedSearch = $state(false);
+    let advFrom = $state('');
+    let advTo = $state('');
+    let advSubject = $state('');
+    let advHasAttachment = $state(false);
+    let advStarred = $state(false);
+    let advAfterDate = $state('');
+    let advBeforeDate = $state('');
 
     // Initialization is handled by +layout.svelte onMount.
     // This component only renders the mail UI; no duplicate API calls needed.
 
     let showContent = $derived(authStore.accounts.length > 0);
+
+    // Handle OAuth flow with proper error handling
+    async function handleAddAccount() {
+        try {
+            console.log("Starting OAuth flow...");
+            const result = await startOAuthFlow();
+            console.log("OAuth URL received:", result.auth_url);
+            await openUrl(result.auth_url);
+        } catch (e) {
+            console.error("Auth error:", e);
+            emailStore.error = "認証エラー: " + (e.message || e);
+        }
+    }
 </script>
 
 <div class="main-content">
@@ -29,14 +42,7 @@
         <div class="empty-inbox">
             <h2>No Accounts</h2>
             <p>Add an email account to get started.</p>
-            <button class="add-account-btn" onclick={async () => {
-                try {
-                    const result = await safeInvoke<{ auth_url: string; state: string }>("start_auth_flow");
-                    await openUrl(result.auth_url);
-                } catch (e) {
-                    emailStore.error = "Auth error: " + e;
-                }
-            }}>
+            <button class="add-account-btn" onclick={handleAddAccount}>
                 Add Google Account
             </button>
         </div>
@@ -160,8 +166,15 @@
                             class="suggestion-item"
                             class:active={i === emailStore.suggestionCursorIndex}
                             role="option"
+                            aria-selected={i === emailStore.suggestionCursorIndex}
                             onclick={() => emailStore.selectSuggestion(i)}
                             onmouseenter={() => emailStore.suggestionCursorIndex = i}
+                            onkeydown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    emailStore.selectSuggestion(i);
+                                }
+                            }}
                         >
                             <span class="suggestion-text">{suggestion.text}</span>
                             {#if suggestion.kind === 'operator'}

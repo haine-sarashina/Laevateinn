@@ -130,12 +130,14 @@
 
             <div class="detail-meta">
                 <div class="meta-sender">
-                    {@const sender = formatSender(msg.from)}
-                    {#if sender.name}
-                        <span class="sender-name">{sender.name}</span>
-                        <span class="sender-email">&lt;{sender.email}&gt;</span>
-                    {:else}
-                        <span class="sender-email">&lt;{sender.email}&gt;</span>
+                    {#if msg.from}
+                        {@const sender = formatSender(msg.from)}
+                        {#if sender.name}
+                            <span class="sender-name">{sender.name}</span>
+                            <span class="sender-email">&lt;{sender.email}&gt;</span>
+                        {:else}
+                            <span class="sender-email">&lt;{sender.email}&gt;</span>
+                        {/if}
                     {/if}
                 </div>
                 <div class="meta-date">{formatDate(msg.date)}</div>
@@ -150,13 +152,18 @@
                     <h3>Attachments ({msg.attachments.length})</h3>
                     <div class="attachments-list">
                         {#each msg.attachments as att (att.filename)}
-                            <div class="attachment-item" onclick={() => downloadAttachment(att)}>
+                            <button
+                                type="button"
+                                class="attachment-item"
+                                onclick={() => downloadAttachment(att)}
+                                aria-label={`Download attachment: ${att.filename}`}
+                            >
                                 <span class="attachment-icon">{getFileIcon(att.mimeType)}</span>
                                 <div class="attachment-info">
                                     <span class="attachment-name">{att.filename}</span>
                                     <span class="attachment-size">{formatSize(att.sizeBytes)}</span>
                                 </div>
-                            </div>
+                            </button>
                         {/each}
                     </div>
                 </div>

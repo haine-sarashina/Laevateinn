@@ -15,6 +15,8 @@ pub struct GmailMessageSummary {
     pub from: String,
     pub date: String,
     pub snippet: String,
+    pub unread: bool,
+    pub starred: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -295,7 +297,7 @@ async fn fetch_message_meta(
     client: &Client,
     token: &str,
     msg_id: &str,
-) -> Option<(String, String, String, String)> {
+) -> Option<(String, String, String, String, bool, bool)> {
     let url = format!(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}?format=metadata",
         msg_id
@@ -408,12 +410,20 @@ async fn fetch_message_meta(
         extract_headers_recursive(payload, &mut subject, &mut from, &mut date);
     }
 
+    let label_ids: Vec<&str> = json
+        .get("labelIds")
+        .and_then(|l| l.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    let unread = label_ids.contains(&"UNREAD");
+    let starred = label_ids.contains(&"STARRED");
+
     println!(
-        "[gmail] fetch_meta {} result: subject='{}' from='{}' date='{}'",
-        msg_id, subject, from, date
+        "[gmail] fetch_meta {} result: subject='{}' from='{}' date='{}' unread={} starred={}",
+        msg_id, subject, from, date, unread, starred
     );
 
-    Some((subject, from, date, snippet))
+    Some((subject, from, date, snippet, unread, starred))
 }
 
 #[tauri::command]
@@ -534,6 +544,8 @@ pub async fn list_messages(
                 from: String::new(),
                 date: String::new(),
                 snippet: String::new(),
+                unread: false,
+                starred: false,
             })
         })
         .collect();
@@ -546,7 +558,7 @@ pub async fn list_messages(
     // Fetch metadata for each message
     let mut enriched_count = 0;
     for msg_id in &message_ids {
-        if let Some((subject, from, date, snippet)) =
+        if let Some((subject, from, date, snippet, unread, starred)) =
             fetch_message_meta(&client, &token, msg_id).await
         {
             let id_str = msg_id.as_str();
@@ -555,6 +567,8 @@ pub async fn list_messages(
                 m.from = from;
                 m.date = date;
                 m.snippet = snippet;
+                m.unread = unread;
+                m.starred = starred;
                 enriched_count += 1;
             }
         }
@@ -987,6 +1001,14 @@ pub struct ModifyLabelsResponse {
     pub message_id: String,
 }
 
+/// レスポンス: sendEmail の結果
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendEmailResponse {
+    pub success: bool,
+    pub message_id: String,
+}
+
 #[tauri::command]
 pub async fn send_email(
     app: tauri::AppHandle,
@@ -998,7 +1020,7 @@ pub async fn send_email(
     bcc: Option<String>,
     attachments: Vec<SendAttachment>,
     scheduled_send_time_ms: Option<u64>,
-) -> Result<(), AppError> {
+) -> Result<SendEmailResponse, AppError> {
     let client = Client::new();
     let url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
 
@@ -1093,8 +1115,15 @@ pub async fn send_email(
         )));
     }
 
-    println!("[gmail] email sent successfully for {}", account_id);
-    Ok(())
+    // Parse the response to get the message ID
+    let json: serde_json::Value = response.json().await.map_err(AppError::from)?;
+    let message_id = json["id"].as_str().unwrap_or("").to_string();
+
+    println!("[gmail] email sent successfully for {}, message_id={}", account_id, message_id);
+    Ok(SendEmailResponse {
+        success: true,
+        message_id,
+    })
 }
 
 /// Gmail API messages.modifyLabels を呼び出してラベルの追加/削除を行う。
@@ -1109,7 +1138,7 @@ pub async fn modify_labels(
 ) -> Result<ModifyLabelsResponse, AppError> {
     let client = Client::new();
     let url = format!(
-        "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}/modifyLabels",
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}/modify",
         message_id
     );
 

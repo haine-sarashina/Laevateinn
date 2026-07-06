@@ -19,6 +19,9 @@
     // Undo-send toast state
     let showToast = $state(false);
     let sentComposeData = $state({ to: '', cc: '', subject: '', body: '' });
+    let sendTimeMs = $state<number | null>(null);
+    let sentMessageId = $state<string | null>(null);
+    let cancelTimeoutId = $state<number | null>(null);
 
     $effect(() => {
         if (!scheduleSend) {
@@ -42,6 +45,9 @@
     $effect(() => {
         return () => {
             showToast = false;
+            if (cancelTimeoutId !== null) {
+                clearTimeout(cancelTimeoutId);
+            }
         };
     });
 
@@ -74,10 +80,18 @@
         isSending = true;
         try {
             const attachments = emailStore.composeAttachments.length > 0 ? emailStore.composeAttachments : undefined;
-            await sendEmail(accountId, to.trim(), subject.trim(), body, cc.trim() || undefined, undefined, attachments, scheduledSendTimeMs);
+            const response = await sendEmail(accountId, to.trim(), subject.trim(), body, cc.trim() || undefined, undefined, attachments, scheduledSendTimeMs);
+
             // Save compose data for undo support
             sentComposeData = { to: to.trim(), cc: cc.trim(), subject: subject.trim(), body };
+            sendTimeMs = Date.now();
+            sentMessageId = response.messageId;
             showToast = true;
+
+            // Set up the auto-cancel timeout (5 seconds)
+            cancelTimeoutId = window.setTimeout(() => {
+                handleCancelEmail();
+            }, 5000);
         } catch (e) {
             // safeInvoke already sets errorStore, but ensure it's set
             if (e instanceof Error) {
@@ -96,13 +110,42 @@
         emailStore.cancelComposing();
     }
 
-    function handleUndoSend() {
+    async function handleUndoSend() {
         showToast = false;
+        if (cancelTimeoutId !== null) {
+            clearTimeout(cancelTimeoutId);
+            cancelTimeoutId = null;
+        }
+
         // Restore compose data so user can edit before re-sending
         to = sentComposeData.to;
         cc = sentComposeData.cc;
         subject = sentComposeData.subject;
         body = sentComposeData.body;
+
+        // Clear the attachments since they are not restored in this undo implementation
+        emailStore.composeAttachments = [];
+    }
+
+    async function handleCancelEmail() {
+        if (sentMessageId === null) return;
+
+        try {
+            // Call the backend cancel_email command to move the message to trash
+            const { invoke } = await import("@tauri-apps/api/core");
+            await invoke('cancel_email', {
+                accountId,
+                messageId: sentMessageId
+            });
+        } catch (e) {
+            console.error("Failed to cancel email:", e);
+        } finally {
+            // Clear the timeout ID
+            if (cancelTimeoutId !== null) {
+                clearTimeout(cancelTimeoutId);
+                cancelTimeoutId = null;
+            }
+        }
     }
 
     function handleToastTimeout() {

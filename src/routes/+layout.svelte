@@ -24,6 +24,8 @@
     let unlistenTokenRefreshed: any = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let unlistenShortcuts: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let unlistenAccountChange: any = null;
 
     let showTimeout = setTimeout(async () => {
         windowReady = true;
@@ -138,14 +140,9 @@
         // Register compose state save/restore for account switching.
         // Before switch: save current compose draft for the old account.
         // After switch: restore compose draft for the new account.
-        const unlistenAccountChange = authStore.onAccountChange({
+        unlistenAccountChange = authStore.onAccountChange({
             before: () => emailStore.saveComposeBeforeSwitch(),
             after: () => emailStore.restoreComposeAfterSwitch(),
-        });
-
-        // Clean up on destroy
-        onDestroy(() => {
-            unlistenAccountChange();
         });
 
         // Register keyboard shortcuts (Gmail-compatible keymap)
@@ -161,9 +158,12 @@
         clearTimeout(showTimeout);
         windowReady = true;
         await showWindow();
-    });
 
+        });
+
+    // Clean up on destroy - moved outside the onMount block to avoid lifecycle error
     onDestroy(() => {
+        if (unlistenAccountChange) unlistenAccountChange();
         if (unlistenOAuthAdded) unlistenOAuthAdded();
         if (unlistenOAuthError) unlistenOAuthError();
         if (unlistenTokenRefreshed) unlistenTokenRefreshed();
@@ -320,7 +320,7 @@
 
 <div class="app">
     <div class="titlebar" data-tauri-drag-region={true}>
-        <span class="titlebar-title" data-tauri-drag-region={true}>Laevateinn</span>
+        <span class="titlebar-title" data-tauri-drag-region={true}>Laevateinn v0.1.3</span>
         <div class="titlebar-actions">
             <button class="theme-toggle" onclick={() => themeStore.toggle()} title="テーマ切替">{themeStore.currentTheme === 'dark' ? '☀' : '🌙'}</button>
         </div>

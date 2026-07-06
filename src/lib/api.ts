@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Notification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
+import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { errorStore } from "./stores/errorStore.svelte";
 
 const COMMAND_TIMEOUT_MS = 60_000;
-const MAX_RETRIES = 1;
+const MAX_RETRIES = 3;
 
 async function invokeWithTimeout<T>(command: string, args?: Record<string, any>): Promise<T> {
     return new Promise((resolve, reject) => {
@@ -79,6 +79,8 @@ export interface GmailListResponse {
         from: string;
         date: string;
         snippet: string;
+        unread: boolean;
+        starred: boolean;
     }> | null;
     nextPageToken: string | null;
 }
@@ -166,8 +168,8 @@ export async function sendEmail(
     bcc?: string,
     attachments?: SendAttachment[],
     scheduledSendTimeMs?: number,
-): Promise<void> {
-    return await safeInvoke<void>('send_email', {
+): Promise<{ messageId: string }> {
+    return await safeInvoke<{ messageId: string }>('send_email', {
         accountId,
         to,
         subject,
@@ -177,6 +179,16 @@ export async function sendEmail(
         attachments: attachments || [],
         scheduledSendTimeMs: scheduledSendTimeMs ?? null,
     });
+}
+
+/**
+ * Starts the OAuth authentication flow.
+ * This function handles opening the auth URL in a browser and waiting for the callback.
+ */
+export async function startOAuthFlow(): Promise<{ auth_url: string, state: string }> {
+    // We'll handle the actual authentication flow through the Tauri backend
+    // which will open the browser window and manage the callback
+    return await safeInvoke<{ auth_url: string, state: string }>('start_auth_flow');
 }
 
 /**
@@ -216,8 +228,8 @@ export async function sendDesktopNotification(title: string, body: string): Prom
         }
         if (!granted) return;
 
-        const notification = new Notification({ title, body });
-        await notification.send();
+        // TauriのNotification APIを使用
+        await invoke('send_notification', { title, body });
     } catch (e) {
         errorStore.set(e);
     }

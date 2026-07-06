@@ -114,7 +114,11 @@
       "Bash(Select-Object -First 80)",
       "Bash(pnpm test *)",
       "Bash(cargo test *)",
-      "Bash(pnpm tsc *)"
+      "Bash(pnpm tsc *)",
+      "PowerShell(\\(Get-CimInstance Win32_ComputerSystem\\).NumberOfLogicalProcessors)",
+      "Bash(DEBUG_MODE=true pnpm run *)",
+      "Bash(pnpm vitest *)",
+      "Bash(echo \"exit=$?\")"
     ]
   }
 }

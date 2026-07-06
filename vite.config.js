@@ -21,11 +21,6 @@ export default defineConfig(async () => ({
     setupFiles: ['./src/tests/setup.ts'],
   },
 
-  // Disable SSR for Svelte 5 runes compatibility in tests
-  ssr: {
-    noExternal: ['svelte', '@testing-library/svelte'],
-  },
-
   // Svelte 5 compiler options for client-side SSR compatibility
   sveltekit: {
     compilerOptions: {

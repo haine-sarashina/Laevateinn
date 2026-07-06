@@ -11,6 +11,7 @@ use commands::auth::{
 };
 use commands::gmail::{get_message_details, list_labels, list_messages, modify_labels, send_email};
 use commands::logger::log_message;
+use commands::undo_send::{cancel_email};
 
 const STATE_FILE: &str = "window-state.json";
 
@@ -196,6 +197,7 @@ pub fn run() {
             list_labels,
             send_email,
             modify_labels,
+            cancel_email,
             log_message
         ])
         .run(tauri::generate_context!())

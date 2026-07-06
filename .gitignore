@@ -6,6 +6,9 @@ node_modules
 /.env
 /.env.*
 !.env.example
+src-tauri/.env
+src-tauri/.env.*
+!src-tauri/.env.example
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 /src-tauri/target/

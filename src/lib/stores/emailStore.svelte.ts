@@ -48,7 +48,7 @@ function isAuthError(e: unknown): boolean {
     return false;
 }
 
-function toEmailMessage(m: { id: string; threadId: string; snippet: string; subject: string; from: string; date: string }): EmailMessage {
+function toEmailMessage(m: { id: string; threadId: string; snippet: string; subject: string; from: string; date: string; unread: boolean; starred: boolean }): EmailMessage {
     return {
         id: m.id,
         threadId: m.threadId,
@@ -57,8 +57,8 @@ function toEmailMessage(m: { id: string; threadId: string; snippet: string; subj
         from: m.from,
         date: m.date,
         body: '',
-        read: false,
-        starred: false,
+        read: !m.unread,
+        starred: m.starred,
     };
 }
 
@@ -200,8 +200,10 @@ class EmailStore {
      * Switches to a label. Null means "show all" (default inbox view).
      */
     async selectLabel(labelId: string | null) {
+        this.reset();
         this.currentLabelId = labelId;
-        await this.refresh();
+        await this.loadLabels();
+        await this.loadMessages(true);
     }
 
     async loadMessages(refresh = false, explicitPageToken?: string, searchQueryOverride?: string, silent = false) {
@@ -310,6 +312,7 @@ class EmailStore {
             // Update message in cache
             const cached = this._cache.get(messageId);
             if (cached) {
+                const wasUnread = !cached.read;
                 cached.read = true;
                 cached.snippet = detail.snippet;
                 cached.subject = detail.subject;
@@ -318,6 +321,16 @@ class EmailStore {
                 // Re-add to update in cache
                 this._cache.add(cached);
                 this._syncMessages();
+
+                // Persist read state to Gmail (remove UNREAD label)
+                if (wasUnread) {
+                    modifyLabels(accountId, messageId, [], ["UNREAD"]).catch(() => {
+                        // Revert optimistic update if the server call fails
+                        cached.read = false;
+                        this._cache.add(cached);
+                        this._syncMessages();
+                    });
+                }
             }
         } catch (e) {
             if (e instanceof Error) {
@@ -545,7 +558,7 @@ class EmailStore {
 
     /**
      * Toggles the star status of a message.
-     * Uses Gmail API messages.modifyLabels to add/remove LABEL_STARRED.
+     * Uses Gmail API messages.modifyLabels to add/remove STARRED.
      */
     async toggleStar(messageId: string) {
         try {
@@ -562,8 +575,8 @@ class EmailStore {
             const result: ModifyLabelsResult = await modifyLabels(
                 accountId,
                 messageId,
-                isStarred ? [] : ["LABEL_STARRED"],     // add if not starred
-                isStarred ? ["LABEL_STARRED"] : [],       // remove if starred
+                isStarred ? [] : ["STARRED"],     // add if not starred
+                isStarred ? ["STARRED"] : [],       // remove if starred
             );
 
             if (result.success) {
@@ -591,7 +604,7 @@ class EmailStore {
     }
 
     /**
-     * Archives a message by removing LABEL_INBOX.
+     * Archives a message by removing INBOX.
      */
     async archiveMessage(messageId: string) {
         try {
@@ -601,7 +614,7 @@ class EmailStore {
                 return;
             }
 
-            await modifyLabels(accountId, messageId, [], ["LABEL_INBOX"]);
+            await modifyLabels(accountId, messageId, [], ["INBOX"]);
 
             // Remove from local cache
             this._cache.delete(messageId);
@@ -622,7 +635,7 @@ class EmailStore {
     }
 
     /**
-     * Moves a message to trash by adding LABEL_TRASH and removing LABEL_INBOX.
+     * Moves a message to trash by adding TRASH and removing INBOX.
      */
     async trashMessage(messageId: string) {
         try {
@@ -632,7 +645,7 @@ class EmailStore {
                 return;
             }
 
-            await modifyLabels(accountId, messageId, ["LABEL_TRASH"], ["LABEL_INBOX"]);
+            await modifyLabels(accountId, messageId, ["TRASH"], ["INBOX"]);
 
             // Remove from local cache
             this._cache.delete(messageId);
@@ -654,7 +667,7 @@ class EmailStore {
     }
 
     /**
-     * Reports a message as spam by adding LABEL_SPAM and removing LABEL_INBOX.
+     * Reports a message as spam by adding SPAM and removing INBOX.
      */
     async spamMessage(messageId: string) {
         try {
@@ -664,7 +677,7 @@ class EmailStore {
                 return;
             }
 
-            await modifyLabels(accountId, messageId, ["LABEL_SPAM"], ["LABEL_INBOX"]);
+            await modifyLabels(accountId, messageId, ["SPAM"], ["INBOX"]);
 
             // Remove from local cache
             this._cache.delete(messageId);

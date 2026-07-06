@@ -39,16 +39,34 @@ const DEFAULT_CLIENT_SECRET: &str = "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";
 
 /// Resolve CLIENT_ID from env `GOOGLE_OAUTH_CLIENT_ID`, falling back to default.
 pub static CLIENT_ID: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("GOOGLE_OAUTH_CLIENT_ID")
-        .ok()
-        .unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string())
+    // Check if we're in debug mode
+    if std::env::var("DEBUG_MODE").map(|s| s.eq_ignore_ascii_case("true")).unwrap_or(false) {
+        // Use debug client ID if DEBUG_MODE is set to true
+        std::env::var("DEBUG_GOOGLE_OAUTH_CLIENT_ID")
+            .ok()
+            .unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string())
+    } else {
+        // Use regular client ID otherwise
+        std::env::var("GOOGLE_OAUTH_CLIENT_ID")
+            .ok()
+            .unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string())
+    }
 });
 
 /// Resolve CLIENT_SECRET from env `GOOGLE_OAUTH_CLIENT_SECRET`, falling back to default.
 pub static CLIENT_SECRET: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("GOOGLE_OAUTH_CLIENT_SECRET")
-        .ok()
-        .unwrap_or_else(|| DEFAULT_CLIENT_SECRET.to_string())
+    // Check if we're in debug mode
+    if std::env::var("DEBUG_MODE").map(|s| s.eq_ignore_ascii_case("true")).unwrap_or(false) {
+        // Use debug client secret if DEBUG_MODE is set to true
+        std::env::var("DEBUG_GOOGLE_OAUTH_CLIENT_SECRET")
+            .ok()
+            .unwrap_or_else(|| DEFAULT_CLIENT_SECRET.to_string())
+    } else {
+        // Use regular client secret otherwise
+        std::env::var("GOOGLE_OAUTH_CLIENT_SECRET")
+            .ok()
+            .unwrap_or_else(|| DEFAULT_CLIENT_SECRET.to_string())
+    }
 });
 const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const REDIRECT_URI: &str = "http://localhost:62000/callback";
@@ -304,13 +322,18 @@ pub async fn start_auth_flow(app: tauri::AppHandle) -> Result<serde_json::Value,
     let auth_endpoint = "https://accounts.google.com/o/oauth2/v2/auth";
     // gmail.readonly = 読み取り専用アクセス（メールの閲覧、設定）
     // gmail.send = メール送信アクセス
-    // gmail.labels = ラベル操作アクセス
+    // gmail.labels = ラベルリソース自体の作成・削除・一覧取得のみ（メッセージへの付与/解除は不可）
+    // gmail.modify = メッセージへのラベル付与/解除（スター、既読/未読、アーカイブ、ゴミ箱移動等のmessages.modifyに必要）
     // gmail.settings.basic = 設定系API（Vacation Responder、フィルター管理）
-    let scope = "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.labels https://www.googleapis.com/auth/gmail.settings.basic";
+    let scope = "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.labels https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.settings.basic";
     let auth_url = format!(
         "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent&code_challenge={}&code_challenge_method=S256&state={}",
         auth_endpoint, CLIENT_ID.as_str(), REDIRECT_URI, scope, challenge, state
     );
+
+    // Add logging for debugging purposes
+    println!("[auth] Starting OAuth flow with state: {}", state);
+    println!("[auth] Auth URL: {}", auth_url);
 
     Ok(serde_json::json!({ "auth_url": auth_url, "state": state }))
 }

@@ -6,6 +6,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tauri::{Emitter, EventTarget, Manager};
 use tiny_http::{Request, Response, Server, StatusCode};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CALLBACK_PORT: u16 = 62000;
 pub const CALLBACK_REDIRECT_URI: &str = "http://localhost:62000/callback";
@@ -37,6 +38,13 @@ fn escape_html(input: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
+}
+
+fn get_timestamp() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards");
+    format!("[{:010}]", now.as_secs())
 }
 
 fn error_page(msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -78,6 +86,7 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
             .get("error_description")
             .unwrap_or(error_code)
             .to_string();
+        println!("[callback_server] OAuth error received: {}", error_msg);
         let _ = request.respond(error_page(&error_msg));
         let _ = app.emit("oauth-error", &error_msg);
         return;
@@ -87,6 +96,7 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     let state = match params.get("state") {
         Some(s) if !s.is_empty() => s.clone(),
         _ => {
+            println!("[callback_server] Invalid state parameter");
             let _ = request.respond(error_page("stateパラメータが見つかりません"));
             return;
         }
@@ -96,6 +106,7 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     let code = match params.get("code") {
         Some(c) if !c.is_empty() => c.clone(),
         _ => {
+            println!("[callback_server] Invalid code parameter");
             let _ = request.respond(error_page("認証コードが見つかりません"));
             return;
         }
@@ -107,6 +118,7 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     let verifier = match crate::commands::auth::verify_and_get_verifier(&state) {
         Some(v) => v,
         None => {
+            println!("[callback_server] State verification failed");
             let _ = request.respond(error_page(
                 "stateの有効期限が切れました。再度認証を開始してください。",
             ));
@@ -119,7 +131,7 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     let dev_url = read_dev_url();
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(5))
         .build()
         .expect("Failed to build reqwest client");
 
@@ -133,6 +145,8 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
         verifier
     );
 
+    println!("[callback_server] Sending token exchange request");
+
     let response = match client
         .post("https://oauth2.googleapis.com/token")
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -142,14 +156,18 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     {
         Ok(r) => r,
         Err(e) => {
+            println!("[callback_server] Token exchange request failed: {}", e);
             let _ = request.respond(error_page(&format!("リクエストに失敗しました: {}", e)));
             return;
         }
     };
 
+    println!("[callback_server] Token exchange response received");
+
     let response_text = match response.text().await {
         Ok(t) => t,
         Err(e) => {
+            println!("[callback_server] Failed to read token response: {}", e);
             let _ = request.respond(error_page(&format!(
                 "レスポンスの読み込みに失敗しました: {}",
                 e
@@ -158,9 +176,12 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
         }
     };
 
+    println!("[callback_server] Token exchange response text: {}", response_text);
+
     let token_data: serde_json::Value = match serde_json::from_str(&response_text) {
         Ok(v) => v,
-        Err(_) => {
+        Err(e) => {
+            println!("[callback_server] Failed to parse token response: {}", e);
             let _ = request.respond(error_page(&format!(
                 "レスポンスの解析に失敗しました: {}",
                 response_text
@@ -176,12 +197,15 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
                 .as_str()
                 .or_else(|| token_data["error"].as_str())
                 .unwrap_or("アクセストークンを取得できませんでした");
+            println!("[callback_server] Token exchange error: {}", msg);
             let _ = request.respond(error_page(msg));
             return;
         }
     };
 
     let refresh_token = token_data["refresh_token"].as_str().map(|s| s.to_string());
+
+    println!("[callback_server] Access token received, fetching user info");
 
     let user_info = match client
         .get("https://www.googleapis.com/oauth2/v3/userinfo")
@@ -191,6 +215,7 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     {
         Ok(r) => r,
         Err(e) => {
+            println!("[callback_server] Failed to fetch user info: {}", e);
             let _ = request.respond(error_page(&format!(
                 "ユーザー情報の取得に失敗しました: {}",
                 e
@@ -202,6 +227,7 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     let user_info_text = match user_info.text().await {
         Ok(t) => t,
         Err(e) => {
+            println!("[callback_server] Failed to read user info: {}", e);
             let _ = request.respond(error_page(&format!(
                 "ユーザー情報の読み込みに失敗しました: {}",
                 e
@@ -210,9 +236,12 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
         }
     };
 
+    println!("[callback_server] User info received: {}", user_info_text);
+
     let user_info: serde_json::Value = match serde_json::from_str(&user_info_text) {
         Ok(v) => v,
         Err(e) => {
+            println!("[callback_server] Failed to parse user info: {}", e);
             let _ = request.respond(error_page(&format!(
                 "ユーザー情報の解析に失敗しました: {}",
                 e
@@ -225,6 +254,7 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     println!("[callback_server] OAuth success for email={}", email);
 
     // Save tokens/accounts via add_account_internal (single source of truth)
+    println!("[callback_server] Attempting to save account for {}", email);
     match crate::commands::auth::add_account_internal(email.clone(), access_token, refresh_token)
         .await
     {
@@ -237,6 +267,7 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     }
 
     // Notify frontend that a new account was added via OAuth
+    println!("[callback_server] Emitting oauth-account-added event for {}", email);
     if let Some(window) = app.get_webview_window("main") {
         match window.emit_to(EventTarget::webview("main"), "oauth-account-added", &email) {
             Ok(_) => println!(
@@ -250,6 +281,7 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
     }
 
     // Return success page
+    println!("[callback_server] Preparing success page for {}", email);
     let success_html = if dev_url.is_some() {
         r#"<html><body style="font-family:Arial,sans-serif;text-align:center;padding:40px">
 <h1>認証完了</h1><p>ブラウザを閉じて、アプリに戻ってください。</p></body></html>"#
@@ -257,8 +289,17 @@ pub async fn handle_request(request: Request, app: tauri::AppHandle) {
         let escaped_email = escape_html(&email);
         &format!("<html><body style=\"font-family:Arial,sans-serif;text-align:center;padding:40px\"><h1>認証完了</h1><p>アカウント「{}」を追加しました。<br>ブラウザを閉じて、アプリに戻ってください。</p></body></html>", escaped_email)
     };
-    let _ = request.respond(Response::from_string(success_html).with_status_code(StatusCode(200)));
 
+    println!("[callback_server] Sending success response for {}", email);
+    // Ensure the response is sent and properly closed
+    let response = Response::from_string(success_html).with_status_code(StatusCode(200));
+    if let Err(e) = request.respond(response) {
+        eprintln!("[callback_server] Failed to send success response: {}", e);
+    } else {
+        println!("[callback_server] Success response sent successfully");
+    }
+
+    println!("[callback_server] Success response sent, stopping server");
     // OAuth callback processed — shut down the server to minimize port exposure.
     stop_callback_server();
 }
@@ -280,11 +321,20 @@ pub fn start_server(app: tauri::AppHandle) {
     let shutdown_flag = state.shutdown_flag.clone();
     let running = state.running.clone();
 
-    tauri::async_runtime::spawn(async move {
+    // IMPORTANT: this accept loop uses tiny_http's synchronous, blocking
+    // `incoming_requests()` iterator. Running it inside `tauri::async_runtime::spawn`
+    // would occupy a Tokio worker thread for the entire lifetime of the server
+    // without ever yielding via `.await`, which can starve every other task
+    // scheduled on that runtime (including the per-request handlers spawned
+    // below) if the runtime doesn't have enough free worker threads. Running it
+    // on its own dedicated OS thread avoids consuming a Tokio worker thread at all.
+    std::thread::spawn(move || {
         use socket2::{Domain, Protocol, Socket, Type};
         use std::net::{SocketAddr, TcpListener};
 
         let addr: SocketAddr = format!("127.0.0.1:{}", CALLBACK_PORT).parse().unwrap();
+        println!("[callback_server] attempting to bind to {}", addr);
+
         let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
             .expect("Failed to create socket");
         socket
@@ -313,7 +363,18 @@ pub fn start_server(app: tauri::AppHandle) {
             println!("[callback_server] incoming request");
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                handle_request(request, app).await;
+                println!("[callback_server] spawned task started");
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(15),
+                    handle_request(request, app),
+                )
+                .await
+                {
+                    Ok(_) => println!("[callback_server] spawned task finished"),
+                    Err(_) => {
+                        println!("[callback_server] spawned task TIMED OUT after 15s - dropping connection");
+                    }
+                }
             });
         }
 
