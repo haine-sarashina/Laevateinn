@@ -2,7 +2,9 @@
     import { emailStore } from "$lib/stores/emailStore.svelte";
 
     // Guard: this component is only rendered when selectedMessage exists (see +page.svelte)
-    const msg = emailStore.selectedMessage!;
+    // Reactive: must track emailStore.selectedMessage so switching messages updates the view
+    // (the component instance is reused across selections, not remounted).
+    let msg = $derived(emailStore.selectedMessage!);
 
     let scrollContainer: HTMLElement | null = $state.raw(null);
 
@@ -81,6 +83,13 @@
                     {emailStore.getMessage(msg.id)?.starred ? '★ Starred' : '☆ Star'}
                 </button>
                 <button
+                    class="action-btn important-action"
+                    title={emailStore.getMessage(msg.id)?.important ? "重要マークを外す" : "重要マークを付ける"}
+                    onclick={() => { if (msg) emailStore.toggleImportant(msg.id); }}
+                >
+                    {emailStore.getMessage(msg.id)?.important ? '🏆 重要' : '🏳 重要にする'}
+                </button>
+                <button
                     class="action-btn reply-action"
                     title="Reply"
                     onclick={() => emailStore.replyToMessage()}
@@ -141,10 +150,6 @@
                     {/if}
                 </div>
                 <div class="meta-date">{formatDate(msg.date)}</div>
-            </div>
-
-            <div class="detail-snippet">
-                <strong>Snippet:</strong> {msg.snippet}
             </div>
 
             {#if msg.attachments && msg.attachments.length > 0}
@@ -284,15 +289,6 @@
     .meta-date {
         color: #9ca3af;
         font-size: 0.8125rem;
-    }
-
-    .detail-snippet {
-        padding: 0.75rem 1rem;
-        background-color: rgba(255, 255, 255, 0.05);
-        border-radius: 8px;
-        margin-bottom: 1.5rem;
-        font-size: 0.8125rem;
-        color: #d1d5db;
     }
 
     .attachments-section {
@@ -450,6 +446,11 @@
     .star-action:hover {
         color: #fbbf24;
         border-color: #f59e0b;
+    }
+
+    .important-action:hover {
+        color: #fcd34d;
+        border-color: #d97706;
     }
 
     .trash-action:hover {

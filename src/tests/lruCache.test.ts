@@ -12,6 +12,8 @@ function createMsg(overrides: Partial<EmailMessage> = {}): EmailMessage {
         date: '2026-01-01T00:00:00Z',
         body: '',
         read: false,
+        starred: false,
+        important: false,
         ...overrides,
     };
 }

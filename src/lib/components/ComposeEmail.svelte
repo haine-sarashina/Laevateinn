@@ -2,26 +2,31 @@
     import { sendEmail, type SendAttachment } from "$lib/api";
     import { emailStore } from "$lib/stores/emailStore.svelte";
     import { errorStore } from "$lib/stores/errorStore.svelte";
+    import { settingsStore } from "$lib/stores/settingsStore.svelte";
+    import { basenameOf, bytesToBase64, inferMimeType } from "$lib/attachments";
     import UndoSendToast from "../../components/UndoSendToast.svelte";
 
     let { accountId } = $props<{ accountId: string }>();
 
     let to = $state(emailStore.composeTo);
     let cc = $state(emailStore.composeCc);
+    let bcc = $state(emailStore.composeBcc);
     let subject = $state(emailStore.composeSubject);
     let body = $state(emailStore.composeBody);
     let isSending = $state(false);
     let showCc = $state(Boolean(emailStore.composeCc));
+    let showBcc = $state(Boolean(emailStore.composeBcc));
     let scheduleSend = $state(false);
     let scheduledDateTime = $state('');
     let scheduleError = $state('');
 
     // Undo-send toast state
     let showToast = $state(false);
-    let sentComposeData = $state({ to: '', cc: '', subject: '', body: '' });
+    let sentComposeData = $state({ to: '', cc: '', bcc: '', subject: '', body: '' });
     let sendTimeMs = $state<number | null>(null);
     let sentMessageId = $state<string | null>(null);
-    let cancelTimeoutId = $state<number | null>(null);
+    // 猶予期間（ミリ秒）。設定画面で 5〜30 秒から選択できる
+    const undoWindowMs = $derived(settingsStore.undoSendSec * 1000);
 
     $effect(() => {
         if (!scheduleSend) {
@@ -39,15 +44,11 @@
         }
     });
 
-    // Cleanup: hide the undo toast and clear any pending child callbacks on destroy.
-    // This prevents stale setTimeout closures in UndoSendToast from firing after
-    // ComposeEmail is destroyed (e.g., forced navigation or external modal close).
+    // Cleanup: hide the undo toast on destroy so stale setTimeout closures in
+    // UndoSendToast cannot fire after ComposeEmail is gone.
     $effect(() => {
         return () => {
             showToast = false;
-            if (cancelTimeoutId !== null) {
-                clearTimeout(cancelTimeoutId);
-            }
         };
     });
 
@@ -80,18 +81,15 @@
         isSending = true;
         try {
             const attachments = emailStore.composeAttachments.length > 0 ? emailStore.composeAttachments : undefined;
-            const response = await sendEmail(accountId, to.trim(), subject.trim(), body, cc.trim() || undefined, undefined, attachments, scheduledSendTimeMs);
+            const response = await sendEmail(accountId, to.trim(), subject.trim(), body, cc.trim() || undefined, bcc.trim() || undefined, attachments, scheduledSendTimeMs);
 
-            // Save compose data for undo support
-            sentComposeData = { to: to.trim(), cc: cc.trim(), subject: subject.trim(), body };
+            // Save compose data so "取り消し" can restore the draft
+            sentComposeData = { to: to.trim(), cc: cc.trim(), bcc: bcc.trim(), subject: subject.trim(), body };
             sendTimeMs = Date.now();
             sentMessageId = response.messageId;
+            // 猶予期間の間トーストを表示する。何もしなければ送信は確定し
+            // （handleToastTimeout）、「取り消し」を押したときだけ撤回する。
             showToast = true;
-
-            // Set up the auto-cancel timeout (5 seconds)
-            cancelTimeoutId = window.setTimeout(() => {
-                handleCancelEmail();
-            }, 5000);
         } catch (e) {
             // safeInvoke already sets errorStore, but ensure it's set
             if (e instanceof Error) {
@@ -110,46 +108,49 @@
         emailStore.cancelComposing();
     }
 
+    /**
+     * 「取り消し」を押したとき: 送信済みメールをゴミ箱へ移し、
+     * 作成画面に内容を復元して編集を続けられるようにする。
+     */
     async function handleUndoSend() {
         showToast = false;
-        if (cancelTimeoutId !== null) {
-            clearTimeout(cancelTimeoutId);
-            cancelTimeoutId = null;
-        }
+        await cancelSentEmail();
 
         // Restore compose data so user can edit before re-sending
         to = sentComposeData.to;
         cc = sentComposeData.cc;
+        bcc = sentComposeData.bcc;
+        showCc = showCc || Boolean(sentComposeData.cc);
+        showBcc = showBcc || Boolean(sentComposeData.bcc);
         subject = sentComposeData.subject;
         body = sentComposeData.body;
+        sentMessageId = null;
 
-        // Clear the attachments since they are not restored in this undo implementation
+        // 添付は復元できない（送信時にバックエンドへ渡したきりのため）
         emailStore.composeAttachments = [];
     }
 
-    async function handleCancelEmail() {
+    /** 送信済みメールを撤回する（Gmail上ではゴミ箱へ移動）。 */
+    async function cancelSentEmail() {
         if (sentMessageId === null) return;
-
         try {
-            // Call the backend cancel_email command to move the message to trash
             const { invoke } = await import("@tauri-apps/api/core");
             await invoke('cancel_email', {
                 accountId,
                 messageId: sentMessageId
             });
         } catch (e) {
-            console.error("Failed to cancel email:", e);
-        } finally {
-            // Clear the timeout ID
-            if (cancelTimeoutId !== null) {
-                clearTimeout(cancelTimeoutId);
-                cancelTimeoutId = null;
-            }
+            errorStore.set({ type: "UndoSendError", message: `送信の取り消しに失敗しました: ${e}` });
         }
     }
 
+    /**
+     * 猶予期間が満了したとき: 送信を確定し、作成画面を閉じる。
+     * ここでメールに手を加えてはいけない。
+     */
     function handleToastTimeout() {
         showToast = false;
+        sentMessageId = null;
         emailStore.cancelComposing();
     }
 
@@ -157,79 +158,86 @@
         showCc = !showCc;
     }
 
+    function toggleBcc() {
+        showBcc = !showBcc;
+    }
+
+    /**
+     * ファイルパスの配列を読み込んで添付に追加する。
+     * ファイル選択ダイアログとドラッグ&ドロップの共通処理。
+     */
+    async function attachFilesFromPaths(filepaths: string[]) {
+        if (filepaths.length === 0) return;
+        const { readFile } = await import("@tauri-apps/plugin-fs");
+
+        const newAttachments: SendAttachment[] = [];
+        for (const filepath of filepaths) {
+            try {
+                const filename = basenameOf(filepath);
+                const bytes = await readFile(filepath);
+                newAttachments.push({
+                    filename,
+                    mimeType: inferMimeType(filename),
+                    data: bytesToBase64(bytes),
+                });
+            } catch (e) {
+                errorStore.set({
+                    type: "AttachmentError",
+                    message: `添付ファイルを読み込めませんでした: ${basenameOf(filepath)}`,
+                });
+                console.error(`[ComposeEmail] Failed to read file ${filepath}:`, e);
+            }
+        }
+
+        if (newAttachments.length > 0) {
+            emailStore.composeAttachments = [...emailStore.composeAttachments, ...newAttachments];
+        }
+    }
+
     async function handleAddAttachment() {
         const { open } = await import("@tauri-apps/plugin-dialog");
-        const { readFile } = await import("@tauri-apps/plugin-fs");
-        const { basename } = await import("@tauri-apps/api/path");
-
         try {
-            const selected = await open({
-                multiple: true,
-                directory: false,
-            });
-
+            const selected = await open({ multiple: true, directory: false });
             if (!selected) return;
-
-            const filepaths = Array.isArray(selected) ? selected : [selected];
-            const newAttachments: SendAttachment[] = [];
-
-            for (const filepath of filepaths) {
-                try {
-                    const filenameResult = await basename(filepath);
-                    const bytes = await readFile(filepath);
-
-                    // Convert Uint8Array to base64
-                    let binary = '';
-                    for (let i = 0; i < bytes.length; i++) {
-                        binary += String.fromCharCode(bytes[i]);
-                    }
-                    const data = btoa(binary);
-
-                    // Infer MIME type from extension
-                    const ext = filenameResult.split('.').pop()?.toLowerCase() || '';
-                    let mimeType = 'application/octet-stream';
-                    const mimeMap: Record<string, string> = {
-                        'pdf': 'application/pdf',
-                        'doc': 'application/msword',
-                        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                        'xls': 'application/vnd.ms-excel',
-                        'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                        'ppt': 'application/vnd.ms-powerpoint',
-                        'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-                        'png': 'image/png',
-                        'jpg': 'image/jpeg',
-                        'jpeg': 'image/jpeg',
-                        'gif': 'image/gif',
-                        'bmp': 'image/bmp',
-                        'svg': 'image/svg+xml',
-                        'txt': 'text/plain',
-                        'csv': 'text/csv',
-                        'htm': 'text/html',
-                        'html': 'text/html',
-                        'zip': 'application/zip',
-                        'gz': 'application/gzip',
-                        'json': 'application/json',
-                        'xml': 'application/xml',
-                    };
-                    mimeType = mimeMap[ext] || mimeType;
-
-                    newAttachments.push({
-                        filename: filenameResult,
-                        mimeType,
-                        data,
-                    });
-                } catch (e) {
-                    console.error(`[ComposeEmail] Failed to read file ${filepath}:`, e);
-                }
-            }
-
-            if (newAttachments.length > 0) {
-                emailStore.composeAttachments = [...emailStore.composeAttachments, ...newAttachments];
-            }
+            await attachFilesFromPaths(Array.isArray(selected) ? selected : [selected]);
         } catch (e) {
             console.error('[ComposeEmail] File picker error:', e);
         }
     }
+
+    // ── ドラッグ&ドロップで添付 ────────────────────────────────
+    // Tauri は既定でwebviewのHTML5ドロップを横取りするため、DOMの
+    // dragover/drop ではなく webview のドラッグ&ドロップイベントを購読する。
+    let isDragOver = $state(false);
+
+    $effect(() => {
+        let unlisten: (() => void) | undefined;
+        let cancelled = false;
+
+        import("@tauri-apps/api/webview")
+            .then(({ getCurrentWebview }) =>
+                getCurrentWebview().onDragDropEvent((event) => {
+                    if (event.payload.type === 'over') {
+                        isDragOver = true;
+                    } else if (event.payload.type === 'drop') {
+                        isDragOver = false;
+                        void attachFilesFromPaths(event.payload.paths ?? []);
+                    } else {
+                        isDragOver = false;
+                    }
+                }),
+            )
+            .then((fn) => {
+                if (cancelled) fn();
+                else unlisten = fn;
+            })
+            .catch((e) => console.error('[ComposeEmail] drag & drop unavailable', e));
+
+        return () => {
+            cancelled = true;
+            unlisten?.();
+        };
+    });
 
     function removeAttachment(index: number) {
         const updated = [...emailStore.composeAttachments];
@@ -270,6 +278,12 @@
         <button class="close-btn" onclick={handleCancel}>&times;</button>
     </div>
 
+    {#if isDragOver}
+        <div class="drop-overlay">
+            <span>📎 ドロップしてファイルを添付</span>
+        </div>
+    {/if}
+
     <div class="compose-body">
         <div class="form-group">
             <label for="compose-to">To</label>
@@ -293,6 +307,23 @@
                         type="email"
                         bind:value={cc}
                         placeholder="cc@example.com (optional)"
+                        autocomplete="off"
+                    />
+                </div>
+            {/if}
+        </div>
+
+        <div class="cc-row">
+            <button class="cc-toggle" onclick={toggleBcc} title="Toggle BCC">
+                {showBcc ? '▾' : '▸'} BCC
+            </button>
+            {#if showBcc}
+                <div class="form-group cc-input">
+                    <input
+                        id="compose-bcc"
+                        type="email"
+                        bind:value={bcc}
+                        placeholder="bcc@example.com (optional)"
                         autocomplete="off"
                     />
                 </div>
@@ -388,19 +419,38 @@
 
 {#if showToast}
     <UndoSendToast
-        message="Message sent"
+        message={scheduleSend ? "送信を予約しました" : "メールを送信しました"}
         onUndo={handleUndoSend}
         onTimeout={handleToastTimeout}
+        duration={undoWindowMs}
     />
 {/if}
 
 <style>
     .compose-container {
+        position: relative;
         display: flex;
         flex-direction: column;
         height: 100%;
         background: #1f2937;
         overflow: hidden;
+    }
+
+    /* ドラッグ中のオーバーレイ（ポインタイベントは透過させる） */
+    .drop-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        background: rgba(66, 133, 244, 0.18);
+        border: 2px dashed #4285f4;
+        border-radius: 8px;
+        color: #dbeafe;
+        font-size: 1rem;
+        font-weight: 600;
     }
 
     .compose-header {

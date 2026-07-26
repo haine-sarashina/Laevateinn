@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import UndoSendToast from '../components/UndoSendToast.svelte';
 
 describe('UndoSendToast', () => {
@@ -85,7 +86,7 @@ describe('UndoSendToast', () => {
         expect(onTimeout).not.toHaveBeenCalled();
     });
 
-    it('shows progress bar that fills over duration', () => {
+    it('shows progress bar that fills over duration', async () => {
         const onUndo = vi.fn();
         render(UndoSendToast, {
             message: 'Message sent',
@@ -100,8 +101,10 @@ describe('UndoSendToast', () => {
         const initialWidth = (progressBar as HTMLElement).style.width;
         expect(initialWidth).toBe('0%');
 
-        // Advance halfway through
-        vi.advanceTimersByTime(2500);
+        // Advance halfway through. Svelte 5 applies state changes to the DOM on
+        // the next tick, so the timers must be advanced asynchronously.
+        await vi.advanceTimersByTimeAsync(2500);
+        await tick();
 
         // Progress should be around 50% (may vary slightly due to interval ticks)
         const midWidth = (progressBar as HTMLElement).style.width;
@@ -123,7 +126,8 @@ describe('UndoSendToast', () => {
         expect(toastEl?.classList.contains('dismissing')).toBe(false);
 
         // Advance to the timeout
-        vi.advanceTimersByTime(5000);
+        await vi.advanceTimersByTimeAsync(5000);
+        await tick();
         // The dismiss class should be added immediately
         expect(toastEl?.classList.contains('dismissing')).toBe(true);
 

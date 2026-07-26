@@ -17,6 +17,9 @@ pub struct GmailMessageSummary {
     pub snippet: String,
     pub unread: bool,
     pub starred: bool,
+    /// IMPORTANT ラベルの有無（重要マークの表示・切替に使う）
+    #[serde(default)]
+    pub important: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +48,12 @@ pub struct MessageDetail {
     pub snippet: String,
     pub subject: String,
     pub from: String,
+    /// 元メールの To ヘッダー（「全員に返信」で使用）
+    #[serde(default)]
+    pub to: String,
+    /// 元メールの Cc ヘッダー（「全員に返信」で使用）
+    #[serde(default)]
+    pub cc: String,
     pub date: String,
     pub body: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -265,39 +274,68 @@ fn plain_text_to_html(text: &str) -> String {
     result
 }
 
-/// 再帰的にpayloadとネストされたpartsからヘッダーを取得（大文字小文字不感）
-fn extract_headers_recursive(
-    part: &serde_json::Value,
-    subject: &mut String,
-    from: &mut String,
-    date: &mut String,
-) {
+/// 空文字なら既定値へ差し替える小ヘルパー。
+fn or_default(value: String, fallback: &str) -> String {
+    if value.is_empty() {
+        fallback.to_string()
+    } else {
+        value
+    }
+}
+
+/// メールから取り出したヘッダー群。
+/// 見つからなかったヘッダーは空文字のままなので、呼び出し側で既定値を当てる。
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ParsedHeaders {
+    pub subject: String,
+    pub from: String,
+    pub to: String,
+    pub cc: String,
+    pub date: String,
+}
+
+/// 再帰的にpayloadとネストされたpartsからヘッダーを取得（大文字小文字不感）。
+/// 外側のpartが優先される（先に代入された値は上書きされない）。
+fn extract_headers_recursive(part: &serde_json::Value, out: &mut ParsedHeaders) {
     if let Some(headers) = part["headers"].as_array() {
         for header in headers {
             let name = header["name"].as_str().unwrap_or("");
             let value = header["value"].as_str().unwrap_or("").to_string();
             let name_upper = name.to_uppercase();
-            match name_upper.as_str() {
-                "SUBJECT" => *subject = value,
-                "FROM" => *from = value,
-                "DATE" => *date = value,
-                _ => {}
+            let slot = match name_upper.as_str() {
+                "SUBJECT" => &mut out.subject,
+                "FROM" => &mut out.from,
+                "TO" => &mut out.to,
+                "CC" => &mut out.cc,
+                "DATE" => &mut out.date,
+                _ => continue,
+            };
+            if slot.is_empty() {
+                *slot = value;
             }
         }
     }
 
     if let Some(parts) = part["parts"].as_array() {
         for subpart in parts {
-            extract_headers_recursive(subpart, subject, from, date);
+            extract_headers_recursive(subpart, out);
         }
     }
 }
 
-async fn fetch_message_meta(
-    client: &Client,
-    token: &str,
-    msg_id: &str,
-) -> Option<(String, String, String, String, bool, bool)> {
+/// 一覧表示に必要なメッセージのメタデータ
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct MessageMeta {
+    pub subject: String,
+    pub from: String,
+    pub date: String,
+    pub snippet: String,
+    pub unread: bool,
+    pub starred: bool,
+    pub important: bool,
+}
+
+async fn fetch_message_meta(client: &Client, token: &str, msg_id: &str) -> Option<MessageMeta> {
     let url = format!(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}?format=metadata",
         msg_id
@@ -402,13 +440,14 @@ async fn fetch_message_meta(
     }
 
     let snippet = json["snippet"].as_str().unwrap_or("").to_string();
-    let mut subject = "No Subject".to_string();
-    let mut from = "Unknown".to_string();
-    let mut date = "Unknown".to_string();
 
+    let mut headers = ParsedHeaders::default();
     if let Some(payload) = json.get("payload") {
-        extract_headers_recursive(payload, &mut subject, &mut from, &mut date);
+        extract_headers_recursive(payload, &mut headers);
     }
+    let subject = or_default(headers.subject, "No Subject");
+    let from = or_default(headers.from, "Unknown");
+    let date = or_default(headers.date, "Unknown");
 
     let label_ids: Vec<&str> = json
         .get("labelIds")
@@ -417,13 +456,22 @@ async fn fetch_message_meta(
         .unwrap_or_default();
     let unread = label_ids.contains(&"UNREAD");
     let starred = label_ids.contains(&"STARRED");
+    let important = label_ids.contains(&"IMPORTANT");
 
     println!(
-        "[gmail] fetch_meta {} result: subject='{}' from='{}' date='{}' unread={} starred={}",
-        msg_id, subject, from, date, unread, starred
+        "[gmail] fetch_meta {} result: subject='{}' from='{}' date='{}' unread={} starred={} important={}",
+        msg_id, subject, from, date, unread, starred, important
     );
 
-    Some((subject, from, date, snippet, unread, starred))
+    Some(MessageMeta {
+        subject,
+        from,
+        date,
+        snippet,
+        unread,
+        starred,
+        important,
+    })
 }
 
 #[tauri::command]
@@ -546,6 +594,7 @@ pub async fn list_messages(
                 snippet: String::new(),
                 unread: false,
                 starred: false,
+                important: false,
             })
         })
         .collect();
@@ -558,17 +607,16 @@ pub async fn list_messages(
     // Fetch metadata for each message
     let mut enriched_count = 0;
     for msg_id in &message_ids {
-        if let Some((subject, from, date, snippet, unread, starred)) =
-            fetch_message_meta(&client, &token, msg_id).await
-        {
+        if let Some(meta) = fetch_message_meta(&client, &token, msg_id).await {
             let id_str = msg_id.as_str();
             if let Some(m) = messages.iter_mut().find(|msg| msg.id.as_str() == id_str) {
-                m.subject = subject;
-                m.from = from;
-                m.date = date;
-                m.snippet = snippet;
-                m.unread = unread;
-                m.starred = starred;
+                m.subject = meta.subject;
+                m.from = meta.from;
+                m.date = meta.date;
+                m.snippet = meta.snippet;
+                m.unread = meta.unread;
+                m.starred = meta.starred;
+                m.important = meta.important;
                 enriched_count += 1;
             }
         }
@@ -657,15 +705,19 @@ pub async fn get_message_details(
 
     let snippet = json["snippet"].as_str().unwrap_or("").to_string();
 
-    let mut subject = "No Subject".to_string();
-    let mut from = "Unknown Sender".to_string();
-    let mut date = "Unknown Date".to_string();
     let mut body = "".to_string();
 
     // 1. Parse Headers (recursive — searches payload and nested parts)
+    let mut parsed = ParsedHeaders::default();
     if let Some(payload) = json.get("payload") {
-        extract_headers_recursive(payload, &mut subject, &mut from, &mut date);
+        extract_headers_recursive(payload, &mut parsed);
     }
+    let subject = or_default(parsed.subject, "No Subject");
+    let from = or_default(parsed.from, "Unknown Sender");
+    let date = or_default(parsed.date, "Unknown Date");
+    // To / Cc は「全員に返信」の宛先組み立てに使う（見つからなければ空文字）
+    let to = parsed.to;
+    let cc = parsed.cc;
 
     // 2. Parse Body (Recursive search for text/plain, text/html, and image/* with CID)
     let payload = &json["payload"];
@@ -847,6 +899,8 @@ pub async fn get_message_details(
         snippet,
         subject,
         from,
+        to,
+        cc,
         date,
         body,
         attachments,
@@ -1377,14 +1431,18 @@ mod tests {
     }
 
     // --- extract_headers_recursive tests ---
+    fn parse_headers(payload: &serde_json::Value) -> ParsedHeaders {
+        let mut out = ParsedHeaders::default();
+        extract_headers_recursive(payload, &mut out);
+        out
+    }
+
     #[test]
     fn extract_headers_finds_subject() {
         let payload = serde_json::json!({
             "headers": [{"name": "Subject", "value": "Test Subject"}]
         });
-        let (mut subj, mut from, mut date) = ("".to_string(), "".to_string(), "".to_string());
-        extract_headers_recursive(&payload, &mut subj, &mut from, &mut date);
-        assert_eq!(subj, "Test Subject");
+        assert_eq!(parse_headers(&payload).subject, "Test Subject");
     }
 
     #[test]
@@ -1396,11 +1454,10 @@ mod tests {
                 {"name": "date", "value": "Mon, 1 Jan 2024"}
             ]
         });
-        let (mut subj, mut from, mut date) = ("".to_string(), "".to_string(), "".to_string());
-        extract_headers_recursive(&payload, &mut subj, &mut from, &mut date);
-        assert_eq!(subj, "lowercase subject");
-        assert_eq!(from, "User <user@example.com>");
-        assert_eq!(date, "Mon, 1 Jan 2024");
+        let h = parse_headers(&payload);
+        assert_eq!(h.subject, "lowercase subject");
+        assert_eq!(h.from, "User <user@example.com>");
+        assert_eq!(h.date, "Mon, 1 Jan 2024");
     }
 
     #[test]
@@ -1412,19 +1469,13 @@ mod tests {
                 "parts": []
             }]
         });
-        let (mut subj, _, _) = ("".to_string(), "".to_string(), "".to_string());
-        extract_headers_recursive(&payload, &mut subj, &mut String::new(), &mut String::new());
-        assert_eq!(subj, "Nested Subject");
+        assert_eq!(parse_headers(&payload).subject, "Nested Subject");
     }
 
     #[test]
     fn extract_headers_no_headers_key() {
         let payload = serde_json::json!({});
-        let (mut subj, mut from, mut date) = ("".to_string(), "".to_string(), "".to_string());
-        extract_headers_recursive(&payload, &mut subj, &mut from, &mut date);
-        assert!(subj.is_empty());
-        assert!(from.is_empty());
-        assert!(date.is_empty());
+        assert_eq!(parse_headers(&payload), ParsedHeaders::default());
     }
 
     #[test]
@@ -1442,10 +1493,58 @@ mod tests {
                 }]
             }]
         });
-        let (mut subj, mut from, _) = ("".to_string(), "".to_string(), "".to_string());
-        extract_headers_recursive(&payload, &mut subj, &mut from, &mut String::new());
-        assert_eq!(subj, "Outer Subject"); // outer takes precedence
-        assert_eq!(from, "Deep Sender <deep@test.com>");
+        let h = parse_headers(&payload);
+        assert_eq!(h.subject, "Outer Subject");
+        assert_eq!(h.from, "Deep Sender <deep@test.com>");
+    }
+
+    #[test]
+    fn extract_headers_outer_part_wins_over_nested() {
+        // 転送メールなどで内側のpartが同じヘッダーを持つ場合、外側（本体）を優先する
+        let payload = serde_json::json!({
+            "headers": [{"name": "Subject", "value": "Outer Subject"}],
+            "parts": [{
+                "headers": [{"name": "Subject", "value": "Inner Subject"}]
+            }]
+        });
+        assert_eq!(parse_headers(&payload).subject, "Outer Subject");
+    }
+
+    #[test]
+    fn extract_headers_finds_to_and_cc() {
+        let payload = serde_json::json!({
+            "headers": [
+                {"name": "To", "value": "a@example.com, B <b@example.com>"},
+                {"name": "Cc", "value": "c@example.com"}
+            ]
+        });
+        let h = parse_headers(&payload);
+        assert_eq!(h.to, "a@example.com, B <b@example.com>");
+        assert_eq!(h.cc, "c@example.com");
+    }
+
+    #[test]
+    fn extract_headers_to_cc_case_insensitive() {
+        let payload = serde_json::json!({
+            "headers": [
+                {"name": "TO", "value": "a@example.com"},
+                {"name": "cc", "value": "c@example.com"}
+            ]
+        });
+        let h = parse_headers(&payload);
+        assert_eq!(h.to, "a@example.com");
+        assert_eq!(h.cc, "c@example.com");
+    }
+
+    // --- or_default tests ---
+    #[test]
+    fn or_default_replaces_empty() {
+        assert_eq!(or_default(String::new(), "No Subject"), "No Subject");
+    }
+
+    #[test]
+    fn or_default_keeps_value() {
+        assert_eq!(or_default("Real".to_string(), "No Subject"), "Real");
     }
 
     // --- ModifyLabelsArgs serialization tests ---
@@ -1646,6 +1745,8 @@ mod tests {
             snippet: "Test email".to_string(),
             subject: "Hello".to_string(),
             from: "sender@example.com".to_string(),
+            to: "me@example.com".to_string(),
+            cc: String::new(),
             date: "Mon, 1 Jan 2024".to_string(),
             body: "<p>Hi</p>".to_string(),
             attachments: vec![],
@@ -1662,6 +1763,8 @@ mod tests {
             snippet: "Email with attachment".to_string(),
             subject: "Report".to_string(),
             from: "bot@example.com".to_string(),
+            to: "me@example.com".to_string(),
+            cc: "team@example.com".to_string(),
             date: "Tue, 2 Jan 2024".to_string(),
             body: "<p>See attached</p>".to_string(),
             attachments: vec![AttachmentInfo {

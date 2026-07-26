@@ -4,6 +4,9 @@ import { errorStore } from "./errorStore.svelte";
 import { authStore } from "./authStore.svelte";
 import { groupMessagesByThread } from "$lib/threads";
 import type { ThreadSummary } from "$lib/threads";
+import { buildReplyAllRecipients } from "$lib/recipients";
+import { buildListRows, sortMessagesForDisplay } from "$lib/messageSections";
+import type { ListRow } from "$lib/messageSections";
 import { LRUMessageCache } from "./lruCache";
 import type { SuggestionItem } from "$lib/searchSuggestions";
 import { generateSuggestions } from "$lib/searchSuggestions";
@@ -18,6 +21,8 @@ export interface EmailMessage {
     body: string;
     read: boolean;
     starred: boolean;
+    /** IMPORTANT ラベルが付いているか */
+    important: boolean;
 }
 
 export interface CacheInfo {
@@ -35,6 +40,9 @@ export interface CacheInfo {
 
 const DEFAULT_CACHE_CAPACITY = 500;
 
+/** How often the background poller checks the server for new mail. */
+export const DEFAULT_POLL_INTERVAL_MS = 60_000;
+
 function isAuthError(e: unknown): boolean {
     if (e instanceof Error) {
         return e.message.includes("AuthError") || e.message.includes("認証");
@@ -48,7 +56,7 @@ function isAuthError(e: unknown): boolean {
     return false;
 }
 
-function toEmailMessage(m: { id: string; threadId: string; snippet: string; subject: string; from: string; date: string; unread: boolean; starred: boolean }): EmailMessage {
+function toEmailMessage(m: { id: string; threadId: string; snippet: string; subject: string; from: string; date: string; unread: boolean; starred: boolean; important?: boolean }): EmailMessage {
     return {
         id: m.id,
         threadId: m.threadId,
@@ -59,6 +67,7 @@ function toEmailMessage(m: { id: string; threadId: string; snippet: string; subj
         body: '',
         read: !m.unread,
         starred: m.starred,
+        important: m.important ?? false,
     };
 }
 
@@ -67,6 +76,7 @@ interface SavedComposeState {
     mode: 'new' | 'reply' | 'reply-all' | 'forward';
     to: string;
     cc: string;
+    bcc: string;
     subject: string;
     body: string;
     attachments: SendAttachment[];
@@ -76,8 +86,18 @@ class EmailStore {
     // LRU-backed message cache with configurable capacity
     private _cache = new LRUMessageCache(DEFAULT_CACHE_CAPACITY);
 
-    /** Reactive array of messages — derived from the LRU cache. */
+    /** Reactive array of messages — derived from the LRU cache, in display order. */
     messages = $state<EmailMessage[]>([]);
+
+    /**
+     * IDs of messages that were unread when they arrived from the server.
+     * Drives the 未読/既読 split; deliberately a snapshot rather than live read
+     * state, so opening a message does not make it jump between sections.
+     */
+    #sectionUnreadIds = $state<Set<string>>(new Set());
+
+    /** Flat row list (section headers + messages) rendered by EmailList. */
+    listRows = $derived<ListRow[]>(buildListRows(this.messages, this.#sectionUnreadIds));
 
     selectedMessage = $state<GmailMessageDetail | null>(null);
     isLoading = $state(false);
@@ -104,6 +124,7 @@ class EmailStore {
     composeMode = $state<'new' | 'reply' | 'reply-all' | 'forward'>('new');
     composeTo = $state<string>('');
     composeCc = $state<string>('');
+    composeBcc = $state<string>('');
     composeSubject = $state<string>('');
     composeBody = $state<string>('');
     composeAttachments = $state<SendAttachment[]>([]);
@@ -139,6 +160,7 @@ class EmailStore {
                 mode: this.composeMode,
                 to: this.composeTo,
                 cc: this.composeCc,
+                bcc: this.composeBcc,
                 subject: this.composeSubject,
                 body: this.composeBody,
                 attachments: [...this.composeAttachments],
@@ -155,6 +177,7 @@ class EmailStore {
                 this.composeMode = saved.mode;
                 this.composeTo = saved.to;
                 this.composeCc = saved.cc;
+                this.composeBcc = saved.bcc ?? '';
                 this.composeSubject = saved.subject;
                 this.composeBody = saved.body;
                 this.composeAttachments = [...saved.attachments];
@@ -175,9 +198,30 @@ class EmailStore {
 
     /**
      * Synchronize the reactive messages array from the internal LRU cache.
+     * The cache preserves insertion order, which does not match arrival time
+     * once pages are appended or entries updated, so ordering is applied here:
+     * unread section first, newest first within each section.
      */
     private _syncMessages(): void {
-        this.messages = this._cache.toArray();
+        this.messages = sortMessagesForDisplay(this._cache.toArray(), this.#sectionUnreadIds);
+    }
+
+    /** Records which of the incoming messages belong to the 未読 section. */
+    #markUnreadSection(incoming: Array<{ id: string; unread: boolean }>): void {
+        const next = new Set(this.#sectionUnreadIds);
+        let changed = false;
+        for (const m of incoming) {
+            if (m.unread && !next.has(m.id)) {
+                next.add(m.id);
+                changed = true;
+            }
+        }
+        if (changed) this.#sectionUnreadIds = next;
+    }
+
+    /** Read-only view of the 未読 section membership (used by tests and the UI). */
+    get unreadSectionIds(): ReadonlySet<string> {
+        return this.#sectionUnreadIds;
     }
 
     /**
@@ -191,6 +235,12 @@ class EmailStore {
 
             const response: GmailLabelsResponse = await listLabels(accountId);
             this.labels = response.labels || [];
+
+            // Default to the inbox so the sidebar always shows which label is
+            // active — an unset label rendered as "nothing selected".
+            if (this.currentLabelId === null && this.labels.some(l => l.id === 'INBOX')) {
+                this.currentLabelId = 'INBOX';
+            }
         } catch (e) {
             console.error('[emailStore] Failed to load labels', e);
         }
@@ -206,9 +256,10 @@ class EmailStore {
         await this.loadMessages(true);
     }
 
-    async loadMessages(refresh = false, explicitPageToken?: string, searchQueryOverride?: string, silent = false) {
+    async loadMessages(refresh = false, explicitPageToken?: string, searchQueryOverride?: string) {
         if (refresh) {
             this._cache.clear();
+            this.#sectionUnreadIds = new Set();
             this._syncMessages();
             this.hasMore = true;
         }
@@ -232,6 +283,7 @@ class EmailStore {
             if (refresh) {
                 // Batch add all messages from fresh load
                 const emailMsgs = newMessages.map(m => toEmailMessage(m));
+                this.#markUnreadSection(newMessages);
                 this._cache.addBatch(emailMsgs);
                 this._syncMessages();
                 this.nextPageToken = tokenFromResponse;
@@ -258,23 +310,15 @@ class EmailStore {
                     }
                 } else {
                     const emailMsgs = unique.map(m => toEmailMessage(m));
+                    this.#markUnreadSection(unique);
                     this._cache.addBatch(emailMsgs);
                     this._syncMessages();
                     this.nextPageToken = tokenFromResponse;
                     this.hasMore = tokenFromResponse !== null;
 
-                    // Desktop notification for genuinely new messages (not on refresh/search/silent)
-                    if (!silent && !this.isSearching && authStore.activeAccountId) {
-                        const unreadNew = unique.filter(m => !this.#notifiedIds.has(m.id));
-                        if (unreadNew.length > 0) {
-                            const firstSender = unreadNew[0].from.split('<')[0].trim() || unreadNew[0].from;
-                            const title = unreadNew.length === 1
-                                ? '1 New Message'
-                                : `${unreadNew.length} New Messages`;
-                            sendDesktopNotification(title, firstSender);
-                            unreadNew.forEach(m => this.#notifiedIds.add(m.id));
-                        }
-                    }
+                    // No notification here: this path appends *older* pages
+                    // (Load More). Genuinely new mail is detected by
+                    // checkForNewMessages() below.
                 }
             }
         } catch (e) {
@@ -292,6 +336,86 @@ class EmailStore {
         } finally {
             this.isLoading = false;
         }
+    }
+
+    /**
+     * Polls the server for mail that arrived after the current first page.
+     * Only the first page is fetched, so pagination state is left untouched;
+     * anything not already cached is merged in and announced once.
+     */
+    async checkForNewMessages(): Promise<number> {
+        const accountId = authStore.activeAccountId;
+        if (!accountId) return 0;
+        // Skip while another fetch is in flight or while showing search results,
+        // where "new mail" is not what the user is looking at.
+        if (this.isLoading || this.isMoreLoading || this.isSearching) return 0;
+
+        try {
+            const response: GmailListResponse = await listMessages(
+                accountId,
+                this.currentLabelId ?? undefined,
+                undefined,
+                this.maxResults,
+                undefined,
+            );
+            const incoming = response.messages || [];
+            const fresh = incoming.filter(m => !this._cache.has(m.id));
+            if (fresh.length === 0) return 0;
+
+            this.#markUnreadSection(fresh);
+            this._cache.addBatch(fresh.map(m => toEmailMessage(m)));
+            this._syncMessages();
+            this.#notifyNewArrivals(fresh);
+            return fresh.length;
+        } catch (e) {
+            // A failed poll must never disrupt the UI — surface it in the log only.
+            console.error('[emailStore] new mail check failed', e);
+            return 0;
+        }
+    }
+
+    /** Sends one desktop notification for messages not yet announced. */
+    #notifyNewArrivals(messages: Array<{ id: string; from: string }>): void {
+        const unannounced = messages.filter(m => !this.#notifiedIds.has(m.id));
+        if (unannounced.length === 0) return;
+        const firstSender = unannounced[0].from.split('<')[0].trim() || unannounced[0].from;
+        const title = unannounced.length === 1
+            ? '新着メール 1件'
+            : `新着メール ${unannounced.length}件`;
+        sendDesktopNotification(title, firstSender);
+        unannounced.forEach(m => this.#notifiedIds.add(m.id));
+    }
+
+    /** Handle of the running poll timer, or null when polling is stopped. */
+    #pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    /** Interval used by startPolling() when no explicit value is given. */
+    pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
+
+    /**
+     * Starts periodic new-mail checks. Idempotent: an existing timer is
+     * replaced, so switching accounts or settings cannot stack timers.
+     */
+    startPolling(intervalMs: number = this.pollIntervalMs): void {
+        this.stopPolling();
+        if (intervalMs <= 0) return;
+        this.pollIntervalMs = intervalMs;
+        this.#pollTimer = setInterval(() => {
+            void this.checkForNewMessages();
+        }, intervalMs);
+    }
+
+    /** Stops periodic new-mail checks. Safe to call when not polling. */
+    stopPolling(): void {
+        if (this.#pollTimer !== null) {
+            clearInterval(this.#pollTimer);
+            this.#pollTimer = null;
+        }
+    }
+
+    /** True while the background poller is running (used by tests). */
+    get isPolling(): boolean {
+        return this.#pollTimer !== null;
     }
 
     async loadMessageDetail(messageId: string) {
@@ -366,7 +490,7 @@ class EmailStore {
         }
         this.isMoreLoading = true;
         try {
-            await this.loadMessages(false, this.nextPageToken, undefined, true);
+            await this.loadMessages(false, this.nextPageToken);
         } finally {
             this.isMoreLoading = false;
         }
@@ -379,6 +503,7 @@ class EmailStore {
         this.composeMode = 'new';
         this.composeTo = '';
         this.composeCc = '';
+        this.composeBcc = '';
         this.composeSubject = '';
         this.composeBody = '';
         this.composeAttachments = [];
@@ -390,6 +515,7 @@ class EmailStore {
         this.composeMode = 'reply';
         this.composeTo = this.selectedMessage.from;
         this.composeCc = '';
+        this.composeBcc = '';
         this.composeSubject = this.selectedMessage.subject.startsWith('Re: ')
             ? this.selectedMessage.subject
             : 'Re: ' + this.selectedMessage.subject;
@@ -401,9 +527,11 @@ class EmailStore {
     replyAllToMessage() {
         if (!this.selectedMessage) return;
         this.composeMode = 'reply-all';
-        // For reply-all, To gets the sender, Cc gets other recipients (simplified: just use sender for now)
-        this.composeTo = this.selectedMessage.from;
-        this.composeCc = '';  // Would need full header parsing to extract CC recipients
+        // To = 元の From + To、Cc = 元の Cc。いずれも自分自身と重複を除く
+        const { to, cc } = buildReplyAllRecipients(this.selectedMessage, authStore.activeAccountId);
+        this.composeTo = to;
+        this.composeCc = cc;
+        this.composeBcc = '';
         this.composeSubject = this.selectedMessage.subject.startsWith('Re: ')
             ? this.selectedMessage.subject
             : 'Re: ' + this.selectedMessage.subject;
@@ -416,6 +544,7 @@ class EmailStore {
         this.composeMode = 'forward';
         this.composeTo = '';
         this.composeCc = '';
+        this.composeBcc = '';
         this.composeSubject = 'Fwd: ' + this.selectedMessage.subject;
         this.composeBody = `<p><br></p><blockquote>${this.selectedMessage.body || this.selectedMessage.snippet}</blockquote>`;
         this.isComposing = true;
@@ -426,6 +555,7 @@ class EmailStore {
         this.composeMode = 'new';
         this.composeTo = '';
         this.composeCc = '';
+        this.composeBcc = '';
         this.composeSubject = '';
         this.composeBody = '';
         this.composeAttachments = [];
@@ -435,6 +565,7 @@ class EmailStore {
         this.nextPageToken = null;
         this.hasMore = true;
         this._cache.clear();
+        this.#sectionUnreadIds = new Set();
         this._syncMessages();
         this.selectedMessage = null;
         this.error = null;
@@ -443,6 +574,8 @@ class EmailStore {
         this.isDetailsLoading = false;
         this.isMoreLoading = false;
         this.expandedThreads = new Set();
+        this.selectedIds = new Set();
+        this.isBulkRunning = false;
         this.currentLabelId = null;
         this.labels = [];
         this.listCursorIndex = -1;
@@ -452,6 +585,7 @@ class EmailStore {
         this.composeMode = 'new';
         this.composeTo = '';
         this.composeCc = '';
+        this.composeBcc = '';
         this.composeSubject = '';
         this.composeBody = '';
         this.composeAttachments = [];
@@ -604,6 +738,95 @@ class EmailStore {
     }
 
     /**
+     * Toggles the IMPORTANT marker (Gmail's manual importance override).
+     */
+    async toggleImportant(messageId: string) {
+        try {
+            const accountId = authStore.activeAccountId;
+            if (!accountId) {
+                this.error = 'No active account selected.';
+                return;
+            }
+
+            const cached = this._cache.get(messageId);
+            const isImportant = cached?.important ?? false;
+
+            const result: ModifyLabelsResult = await modifyLabels(
+                accountId,
+                messageId,
+                isImportant ? [] : ["IMPORTANT"],
+                isImportant ? ["IMPORTANT"] : [],
+            );
+
+            if (result.success && cached) {
+                cached.important = !isImportant;
+                this._cache.add(cached);
+                this._syncMessages();
+            }
+        } catch (e) {
+            this.#reportError(e, 'Failed to toggle importance');
+        }
+    }
+
+    /**
+     * Returns the message that should take the selection when `messageId`
+     * leaves the list: the one after it, or the one before it at the end.
+     * Must be called *before* the message is removed from the cache.
+     */
+    #neighbourOf(messageId: string): EmailMessage | null {
+        const idx = this.messages.findIndex(m => m.id === messageId);
+        if (idx < 0) return null;
+        return this.messages[idx + 1] ?? this.messages[idx - 1] ?? null;
+    }
+
+    /**
+     * Drops a message from the list and moves the selection on to its
+     * neighbour, so archiving/deleting walks through the inbox instead of
+     * dumping the user back on an empty pane.
+     */
+    async #removeAndAdvance(messageId: string, neighbour: EmailMessage | null) {
+        const wasSelected = this.selectedMessage?.id === messageId;
+        this._cache.delete(messageId);
+        if (this.#sectionUnreadIds.has(messageId)) {
+            const next = new Set(this.#sectionUnreadIds);
+            next.delete(messageId);
+            this.#sectionUnreadIds = next;
+        }
+        this._syncMessages();
+
+        if (!wasSelected) {
+            // Keep the cursor pointing at the same message it was on
+            this.listCursorIndex = this.selectedMessage
+                ? this.messages.findIndex(m => m.id === this.selectedMessage!.id)
+                : Math.min(this.listCursorIndex, this.messages.length - 1);
+            return;
+        }
+
+        if (neighbour && this._cache.has(neighbour.id)) {
+            this.listCursorIndex = this.messages.findIndex(m => m.id === neighbour.id);
+            await this.loadMessageDetail(neighbour.id);
+        } else {
+            this.selectedMessage = null;
+            this.listCursorIndex = -1;
+        }
+    }
+
+    /** Shared error handling for the label-modifying actions. */
+    #reportError(e: unknown, fallback: string) {
+        if (e instanceof Error) {
+            this.error = e.message;
+        } else if (typeof e === "object" && e !== null && "message" in e) {
+            this.error = String((e as { message: unknown }).message);
+        } else {
+            this.error = `${fallback}: ${e}`;
+        }
+        this.isAuthErrorFlag = isAuthError(e);
+        if (!this.isAuthErrorFlag) {
+            errorStore.set(this.error);
+        }
+    }
+
+    /**
      * Archives a message by removing INBOX.
      */
     async archiveMessage(messageId: string) {
@@ -614,11 +837,9 @@ class EmailStore {
                 return;
             }
 
+            const neighbour = this.#neighbourOf(messageId);
             await modifyLabels(accountId, messageId, [], ["INBOX"]);
-
-            // Remove from local cache
-            this._cache.delete(messageId);
-            this._syncMessages();
+            await this.#removeAndAdvance(messageId, neighbour);
         } catch (e) {
             if (e instanceof Error) {
                 this.error = e.message;
@@ -645,12 +866,9 @@ class EmailStore {
                 return;
             }
 
+            const neighbour = this.#neighbourOf(messageId);
             await modifyLabels(accountId, messageId, ["TRASH"], ["INBOX"]);
-
-            // Remove from local cache
-            this._cache.delete(messageId);
-            this._syncMessages();
-            this.selectedMessage = null;
+            await this.#removeAndAdvance(messageId, neighbour);
         } catch (e) {
             if (e instanceof Error) {
                 this.error = e.message;
@@ -677,12 +895,9 @@ class EmailStore {
                 return;
             }
 
+            const neighbour = this.#neighbourOf(messageId);
             await modifyLabels(accountId, messageId, ["SPAM"], ["INBOX"]);
-
-            // Remove from local cache
-            this._cache.delete(messageId);
-            this._syncMessages();
-            this.selectedMessage = null;
+            await this.#removeAndAdvance(messageId, neighbour);
         } catch (e) {
             if (e instanceof Error) {
                 this.error = e.message;
@@ -696,6 +911,139 @@ class EmailStore {
                 errorStore.set(this.error);
             }
         }
+    }
+
+    // ── Bulk selection ─────────────────────────────────────────
+
+    /** IDs ticked with the list checkboxes. */
+    selectedIds = $state<Set<string>>(new Set());
+
+    /** True while a bulk action is in flight (disables the action bar). */
+    isBulkRunning = $state(false);
+
+    get hasSelection(): boolean {
+        return this.selectedIds.size > 0;
+    }
+
+    isSelected(id: string): boolean {
+        return this.selectedIds.has(id);
+    }
+
+    toggleSelected(id: string): void {
+        const next = new Set(this.selectedIds);
+        if (next.has(id)) {
+            next.delete(id);
+        } else {
+            next.add(id);
+        }
+        this.selectedIds = next;
+    }
+
+    /** Ticks every message currently in the list, or clears if all are ticked. */
+    toggleSelectAll(): void {
+        if (this.selectedIds.size === this.messages.length && this.messages.length > 0) {
+            this.selectedIds = new Set();
+        } else {
+            this.selectedIds = new Set(this.messages.map(m => m.id));
+        }
+    }
+
+    clearSelection(): void {
+        this.selectedIds = new Set();
+    }
+
+    /**
+     * Applies a label change to every selected message.
+     *
+     * Requests run in parallel — the selection is at most one page — and any
+     * message the server accepted is dropped from the list when `remove` is set.
+     * Failures are reported once rather than per message.
+     */
+    async #bulkModify(add: string[], remove: string[], dropFromList: boolean): Promise<number> {
+        const accountId = authStore.activeAccountId;
+        if (!accountId || this.selectedIds.size === 0) return 0;
+
+        const ids = [...this.selectedIds];
+        this.isBulkRunning = true;
+        try {
+            const results = await Promise.allSettled(
+                ids.map(id => modifyLabels(accountId, id, add, remove)),
+            );
+
+            let succeeded = 0;
+            results.forEach((result, i) => {
+                if (result.status !== 'fulfilled') return;
+                succeeded++;
+                const id = ids[i];
+                if (dropFromList) {
+                    this._cache.delete(id);
+                } else {
+                    const cached = this._cache.get(id);
+                    if (cached) {
+                        if (add.includes('STARRED')) cached.starred = true;
+                        if (remove.includes('STARRED')) cached.starred = false;
+                        if (remove.includes('UNREAD')) cached.read = true;
+                        if (add.includes('UNREAD')) cached.read = false;
+                        this._cache.add(cached);
+                    }
+                }
+            });
+
+            if (dropFromList) {
+                const removed = new Set(ids);
+                const nextSection = new Set(
+                    [...this.#sectionUnreadIds].filter(id => !removed.has(id)),
+                );
+                this.#sectionUnreadIds = nextSection;
+                if (this.selectedMessage && removed.has(this.selectedMessage.id)) {
+                    this.selectedMessage = null;
+                    this.listCursorIndex = -1;
+                }
+            }
+            this._syncMessages();
+
+            const failed = results.length - succeeded;
+            if (failed > 0) {
+                this.#reportError(
+                    new Error(`${failed}件の操作に失敗しました`),
+                    'Bulk action failed',
+                );
+            }
+            this.clearSelection();
+            return succeeded;
+        } finally {
+            this.isBulkRunning = false;
+        }
+    }
+
+    /** Archives every selected message. */
+    bulkArchive(): Promise<number> {
+        return this.#bulkModify([], ["INBOX"], true);
+    }
+
+    /** Moves every selected message to the trash. */
+    bulkTrash(): Promise<number> {
+        return this.#bulkModify(["TRASH"], ["INBOX"], true);
+    }
+
+    /** Marks every selected message as read. */
+    bulkMarkRead(): Promise<number> {
+        return this.#bulkModify([], ["UNREAD"], false);
+    }
+
+    /** Marks every selected message as unread. */
+    bulkMarkUnread(): Promise<number> {
+        return this.#bulkModify(["UNREAD"], [], false);
+    }
+
+    /** Stars every selected message. */
+    bulkStar(): Promise<number> {
+        return this.#bulkModify(["STARRED"], [], false);
+    }
+
+    /** Removes the star from every selected message. */
+    bulkUnstar(): Promise<number> {
+        return this.#bulkModify([], ["STARRED"], false);
     }
 
     /**

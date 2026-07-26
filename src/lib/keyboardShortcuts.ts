@@ -3,7 +3,6 @@ import type { GmailMessageDetail } from "$lib/api";
 // Minimal interfaces for the stores (only what keyboardShortcuts uses)
 // Avoid importing non-exported class types from Svelte modules
 interface EmailStoreLike {
-    activeAccountId: string | null;
     isComposing: boolean;
     selectedMessage: GmailMessageDetail | null;
     messages: ReadonlyArray<{ id: string }>;
@@ -114,8 +113,8 @@ class ShortcutHandler {
  * @returns An unsubscribe function that removes the window listener.
  */
 export function useShortcuts(
-    emailStore: EmailStore,
-    authStore: AuthStore,
+    emailStore: EmailStoreLike,
+    authStore: AuthStoreLike,
 ): () => void {
     const handler = new ShortcutHandler();
 

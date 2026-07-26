@@ -1,8 +1,8 @@
 <script lang="ts">
+    import { untrack } from "svelte";
     import { emailStore } from "$lib/stores/emailStore.svelte";
-    import { createVirtualScroll } from "$lib/utils/virtualScroll";
-
-    const VIRTUAL_ROW_HEIGHT = 76;
+    import { computeVariableVirtualScroll, scrollTopToReveal } from "$lib/utils/virtualScroll";
+    import { rowHeights, rowIndexForMessage } from "$lib/messageSections";
 
     async function loadMore() {
         await emailStore.loadMoreMessages();
@@ -38,57 +38,88 @@
         return text.length > maxLen ? text.slice(0, maxLen) + '...' : text;
     }
 
-    // ── Virtual scrolling ──────────────────────────────────────
+    // ── Virtual scrolling (variable row heights: headers are shorter) ──
     let container = $state<HTMLElement | null>(null);
     let scrollTop = $state(0);
+    let viewportHeight = $state(400);
 
-    const vs = createVirtualScroll({
-        getItemCount: () => emailStore.messages.length,
-        rowHeight: VIRTUAL_ROW_HEIGHT,
-    });
+    const rows = $derived(emailStore.listRows);
+    const heights = $derived(rowHeights(rows));
+    const vsState = $derived(computeVariableVirtualScroll(viewportHeight, scrollTop, { itemHeights: heights }));
 
-    // Attach when container mounts, cleanup on unmount
+    // Keep the keyboard cursor visible. Only scrolls when the row is actually
+    // off-screen, so selecting a visible message never moves the list.
+    // Only the cursor is tracked — mail arriving from the poller reshapes
+    // `rows`, and that must not scroll the list under the user.
     $effect(() => {
-        if (container) {
-            vs.attach(container);
-            return () => vs.detach();
-        }
-    });
-
-    // Recompute virtual scroll state on every scrollTop or message-count change
-    const vsState = $derived(vs.update(scrollTop));
-
-    // Scroll to cursor when it changes (keyboard navigation)
-    $effect(() => {
-        if (container && emailStore.listCursorIndex >= 0) {
-            vs.scrollToIndex(emailStore.listCursorIndex);
-        }
+        const cursor = emailStore.listCursorIndex;
+        if (cursor < 0) return;
+        untrack(() => {
+            if (!container) return;
+            const rowIndex = rowIndexForMessage(rows, cursor);
+            if (rowIndex < 0) return;
+            const next = scrollTopToReveal(rowIndex, heights, container.scrollTop, container.clientHeight);
+            if (next !== null) {
+                container.scrollTop = next;
+                scrollTop = next;
+            }
+        });
     });
 </script>
 
 <div class="email-list-view">
+    {#if emailStore.hasSelection}
+        <div class="bulk-bar">
+            <span class="bulk-count">{emailStore.selectedIds.size}件選択中</span>
+            <div class="bulk-actions">
+                <button title="既読にする" disabled={emailStore.isBulkRunning} onclick={() => emailStore.bulkMarkRead()}>既読</button>
+                <button title="未読にする" disabled={emailStore.isBulkRunning} onclick={() => emailStore.bulkMarkUnread()}>未読</button>
+                <button title="スターを付ける" disabled={emailStore.isBulkRunning} onclick={() => emailStore.bulkStar()}>★</button>
+                <button title="アーカイブ" disabled={emailStore.isBulkRunning} onclick={() => emailStore.bulkArchive()}>📦</button>
+                <button class="danger" title="ゴミ箱へ" disabled={emailStore.isBulkRunning} onclick={() => emailStore.bulkTrash()}>🗑</button>
+                <button title="選択を解除" disabled={emailStore.isBulkRunning} onclick={() => emailStore.clearSelection()}>×</button>
+            </div>
+        </div>
+    {/if}
+
     <div
         class="message-list"
         bind:this={container}
+        bind:clientHeight={viewportHeight}
         onscroll={(e) => { scrollTop = (e.target as HTMLDivElement).scrollTop; }}
     >
         <!-- Top spacer to push visible items down -->
         <div style="height: {vsState.offsetTop}px"></div>
 
-        <!-- Only render visible items with absolute positioning -->
+        <!-- Only render visible rows with absolute positioning -->
         {#each vsState.visibleItems as item (item.index)}
-            {@const message = emailStore.messages[item.index]}
-            {#if message}
-                <div
-                    class="message-row"
-                    style="position: absolute; top: {item.top}px; left: 0; right: 0;"
-                >
+            {@const row = rows[item.index]}
+            {#if row?.kind === 'header'}
+                <div class="section-header" style="top: {item.top}px">
+                    <span class="section-label">{row.label}</span>
+                    <span class="section-count">{row.count}</span>
+                    {#if row.id === 'section-unread'}
+                        <button class="select-all-btn" onclick={() => emailStore.toggleSelectAll()}>
+                            すべて選択
+                        </button>
+                    {/if}
+                </div>
+            {:else if row?.kind === 'message'}
+                {@const message = row.message}
+                <div class="message-row" style="top: {item.top}px">
+                    <label class="select-box" title="選択">
+                        <input
+                            type="checkbox"
+                            checked={emailStore.isSelected(message.id)}
+                            onchange={() => emailStore.toggleSelected(message.id)}
+                        />
+                    </label>
                     <button
                         class="message-item"
                         class:read={message.read}
                         class:active={emailStore.selectedMessage?.id === message.id}
-                        class:cursor={item.index === emailStore.listCursorIndex}
-                        onclick={() => { emailStore.listCursorIndex = item.index; emailStore.loadMessageDetail(message.id); }}
+                        class:cursor={row.messageIndex === emailStore.listCursorIndex}
+                        onclick={() => { emailStore.listCursorIndex = row.messageIndex; emailStore.loadMessageDetail(message.id); }}
                     >
                         <div class="message-header">
                             <span class="sender">{truncate(formatSender(message.from), 25)}</span>
@@ -144,7 +175,9 @@
         min-height: 0;
         overflow-y: auto;
         overflow-x: hidden;
-        padding: 0.5rem;
+        /* No vertical padding: absolutely positioned rows are offset from the
+           padding box, so padding here would desync them from the spacers. */
+        padding: 0;
     }
 
     /* Custom scrollbar styling */
@@ -296,6 +329,107 @@
     .message-row {
         display: flex;
         align-items: stretch;
+        position: absolute;
+        left: 0.5rem;
+        right: 0.5rem;
+    }
+
+    /* Unread / read section headers — heights must match HEADER_ROW_HEIGHT. */
+    .section-header {
+        position: absolute;
+        left: 0.5rem;
+        right: 0.5rem;
+        height: 30px;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0 0.25rem;
+        box-sizing: border-box;
+    }
+
+    .section-label {
+        color: #9ca3af;
+        font-size: 0.6875rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+    }
+
+    .section-count {
+        color: #6b7280;
+        font-size: 0.6875rem;
+    }
+
+    .select-all-btn {
+        margin-left: auto;
+        background: none;
+        border: none;
+        color: #6b7280;
+        font-family: inherit;
+        font-size: 0.6875rem;
+        cursor: pointer;
+        padding: 0.125rem 0.25rem;
+        border-radius: 4px;
+    }
+
+    .select-all-btn:hover {
+        color: #93c5fd;
+        background: rgba(255, 255, 255, 0.06);
+    }
+
+    /* Bulk selection */
+    .select-box {
+        display: flex;
+        align-items: center;
+        padding: 0 0.5rem 0 0.25rem;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+
+    .bulk-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.375rem 0.625rem;
+        background: rgba(66, 133, 244, 0.15);
+        border-bottom: 1px solid #4285f4;
+        flex-shrink: 0;
+    }
+
+    .bulk-count {
+        font-size: 0.75rem;
+        color: #93c5fd;
+        font-weight: 600;
+    }
+
+    .bulk-actions {
+        display: flex;
+        gap: 0.25rem;
+    }
+
+    .bulk-actions button {
+        background: #1f2937;
+        border: 1px solid #374151;
+        border-radius: 4px;
+        color: #d1d5db;
+        font-family: inherit;
+        font-size: 0.75rem;
+        padding: 0.1875rem 0.5rem;
+        cursor: pointer;
+    }
+
+    .bulk-actions button:hover:not(:disabled) {
+        background: #374151;
+    }
+
+    .bulk-actions button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .bulk-actions button.danger:hover:not(:disabled) {
+        color: #f87171;
+        border-color: #ef4444;
     }
 
     .message-row .message-item {

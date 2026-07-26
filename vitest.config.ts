@@ -1,8 +1,14 @@
 import { defineConfig } from 'vitest/config';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { svelteTesting } from '@testing-library/svelte/vite';
 
 export default defineConfig({
-  plugins: [sveltekit()],
+  /**
+   * svelteTesting() forces the "browser" export condition so Svelte resolves to
+   * its client runtime. Without it, component tests fail with
+   * "mount(...) is not available on the server".
+   */
+  plugins: [sveltekit(), svelteTesting()],
   test: {
     environment: 'jsdom',
     globals: true,

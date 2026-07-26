@@ -85,6 +85,108 @@ export function computeVirtualScroll(
     };
 }
 
+export interface VariableVirtualScrollOptions {
+    /** Height in pixels of each row, in list order. */
+    itemHeights: number[];
+    /** Extra rows to render above/below viewport as a buffer. Default 5. */
+    buffer?: number;
+}
+
+/**
+ * Variable-height counterpart of {@link computeVirtualScroll}.
+ *
+ * The email list mixes 76px message rows with 30px section headers, so row
+ * positions come from a prefix sum instead of `index * rowHeight`.
+ * Pure function — no DOM access, no side effects.
+ */
+export function computeVariableVirtualScroll(
+    containerHeight: number,
+    scrollTop: number,
+    options: VariableVirtualScrollOptions,
+): VirtualScrollState {
+    const { itemHeights, buffer = 5 } = options;
+    const itemCount = itemHeights.length;
+
+    if (itemCount === 0) {
+        return {
+            startIndex: 0,
+            endIndex: 0,
+            offsetTop: 0,
+            offsetBottom: 0,
+            totalHeight: 0,
+            visibleItems: [],
+        };
+    }
+
+    // offsets[i] = absolute Y of row i; offsets[itemCount] = total height
+    const offsets = rowOffsets(itemHeights);
+    const totalHeight = offsets[itemCount];
+
+    // First row whose bottom edge is below the viewport top
+    let rawStart = 0;
+    while (rawStart < itemCount - 1 && offsets[rawStart + 1] <= scrollTop) {
+        rawStart++;
+    }
+    // Last row whose top edge is above the viewport bottom
+    const viewportBottom = scrollTop + containerHeight;
+    let rawEnd = rawStart;
+    while (rawEnd < itemCount - 1 && offsets[rawEnd + 1] < viewportBottom) {
+        rawEnd++;
+    }
+
+    const startIndex = Math.max(0, rawStart - buffer);
+    const endIndex = Math.min(itemCount - 1, rawEnd + buffer);
+
+    const offsetTop = offsets[startIndex];
+    const offsetBottom = totalHeight - offsets[endIndex + 1];
+
+    const visibleItems: VisibleItem[] = [];
+    for (let i = startIndex; i <= endIndex; i++) {
+        visibleItems.push({ index: i, top: offsets[i] });
+    }
+
+    return { startIndex, endIndex, offsetTop, offsetBottom, totalHeight, visibleItems };
+}
+
+/**
+ * Prefix sum of row heights. Length is `heights.length + 1`; the last entry is
+ * the total content height.
+ */
+export function rowOffsets(heights: number[]): number[] {
+    const offsets = new Array<number>(heights.length + 1);
+    offsets[0] = 0;
+    for (let i = 0; i < heights.length; i++) {
+        offsets[i + 1] = offsets[i] + heights[i];
+    }
+    return offsets;
+}
+
+/**
+ * Minimal scroll adjustment that brings row `index` fully into view.
+ * Returns the new scrollTop, or `null` when the row is already visible — the
+ * caller must not touch the container in that case, so that merely selecting a
+ * visible message never moves the list.
+ */
+export function scrollTopToReveal(
+    index: number,
+    heights: number[],
+    scrollTop: number,
+    containerHeight: number,
+): number | null {
+    if (index < 0 || index >= heights.length) return null;
+    const offsets = rowOffsets(heights);
+    const top = offsets[index];
+    const bottom = top + heights[index];
+
+    if (top < scrollTop) return top;
+    if (bottom > scrollTop + containerHeight) {
+        // A row taller than the viewport can never fit: show it from the top.
+        if (heights[index] >= containerHeight) return top;
+        return bottom - containerHeight;
+    }
+    return null;
+}
+
 /**
  * Create a virtual scroll controller bound to a DOM element.
  *

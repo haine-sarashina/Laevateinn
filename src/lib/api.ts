@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { errorStore } from "./stores/errorStore.svelte";
 
 const COMMAND_TIMEOUT_MS = 60_000;
@@ -97,6 +97,10 @@ export interface GmailMessageDetail {
     snippet: string;
     subject: string;
     from: string;
+    /** 元メールの To ヘッダー（「全員に返信」で使用） */
+    to?: string;
+    /** 元メールの Cc ヘッダー（「全員に返信」で使用） */
+    cc?: string;
     date: string;
     body: string;
     attachments?: GmailAttachment[];
@@ -215,9 +219,10 @@ export async function modifyLabels(
 }
 
 /**
- * Sends a desktop notification via the Tauri Notification API.
+ * Sends a desktop notification via the Tauri Notification plugin.
  * Requests permission if not already granted.
- * Errors are caught and stored in errorStore (non-fatal).
+ * Failures are logged only — a missed notification must not raise an error
+ * toast on every new-mail check.
  */
 export async function sendDesktopNotification(title: string, body: string): Promise<void> {
     try {
@@ -228,9 +233,10 @@ export async function sendDesktopNotification(title: string, body: string): Prom
         }
         if (!granted) return;
 
-        // TauriのNotification APIを使用
-        await invoke('send_notification', { title, body });
+        // プラグインの sendNotification を使用（`send_notification` という
+        // Tauri コマンドは存在しないため、以前は実行時に必ず失敗していた）
+        sendNotification({ title, body });
     } catch (e) {
-        errorStore.set(e);
+        console.error('[api] failed to send desktop notification', e);
     }
 }

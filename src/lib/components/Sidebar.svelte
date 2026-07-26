@@ -1,42 +1,14 @@
 <script lang="ts">
     import { authStore } from "$lib/stores/authStore.svelte";
     import { emailStore } from "$lib/stores/emailStore.svelte";
-    import { safeInvoke } from "$lib/api";
+    import { settingsStore } from "$lib/stores/settingsStore.svelte";
+    import { getLabelInfo, selectableLabels } from "$lib/labels";
 
-    let { onLogin } = $props<{ onLogin: () => Promise<void> }>();
-
-    // Standard Gmail system labels with icons and Japanese display names
-    const LABEL_ICONS: Record<string, { icon: string; name: string }> = {
-        INBOX: { icon: '📥', name: '受信トレイ' },
-        SENT: { icon: '📤', name: '送信トレイ' },
-        DRAFT: { icon: '📝', name: '下書き' },
-        STARRED: { icon: '⭐', name: 'スター付き' },
-        IMPORTANT: { icon: '🏆', name: '重要' },
-        SPAM: { icon: '⚠️', name: 'スパム' },
-        TRASH: { icon: '🗑️', name: 'ゴミ箱' },
-        CATEGORY_PERSONAL: { icon: '🏠', name: 'プライベート' },
-        CATEGORY_SOCIAL: { icon: '👥', name: 'ソーシャル' },
-        CATEGORY_PROMOTIONS: { icon: '🎉', name: 'プロモーション' },
-        CATEGORY_UPDATES: { icon: '📢', name: 'アップデート' },
-        CATEGORY_FORUMS: { icon: '💬', name: 'フォーラム' },
-    };
-
-    function getLabelInfo(labelName: string): { icon: string; name: string } {
-        return LABEL_ICONS[labelName] ?? { icon: '📂', name: labelName };
-    }
-
-    // Labels that Gmail hides from the sidebar
-    const HIDDEN_LABELS = new Set(['CHAT', 'YELLOW_STAR', 'UNREAD']);
-
-    async function handleAddAccount() {
-        await onLogin();
-    }
-
-    async function handleRemoveAccount(id: string) {
-        if (confirm(`Are you sure you want to remove account ${id}?`)) {
-            await authStore.removeAccount(id);
-        }
-    }
+    // Accounts and labels honour the order / visibility chosen in the settings screen.
+    const accounts = $derived(settingsStore.orderedAccounts(authStore.accounts));
+    const labels = $derived(
+        settingsStore.sidebarLabels(authStore.activeAccountId, selectableLabels(emailStore.labels)),
+    );
 
     async function handleLabelClick(labelId: string | null) {
         await emailStore.selectLabel(labelId);
@@ -49,12 +21,12 @@
     </div>
 
     <nav class="account-list">
-        {#if authStore.accounts.length === 0}
+        {#if accounts.length === 0}
             <div class="no-accounts">
                 No accounts found
             </div>
         {:else}
-            {#each authStore.accounts as account}
+            {#each accounts as account (account.id)}
                 <div class="account-group">
                     <button
                         class="account-item"
@@ -62,9 +34,6 @@
                         onclick={() => authStore.setActiveAccount(account.id)}
                     >
                         {account.name}
-                    </button>
-                    <button class="remove-account-btn" onclick={() => handleRemoveAccount(account.id)}>
-                        ×
                     </button>
                 </div>
             {/each}
@@ -74,25 +43,31 @@
     <!-- Labels Section -->
     {#if authStore.activeAccountId}
         <div class="labels-section">
-            <div class="labels-header">Labels</div>
+            <div class="labels-header">
+                <span>Labels</span>
+                <button
+                    class="labels-settings-btn"
+                    title="ラベルの表示・並び順を設定"
+                    onclick={() => settingsStore.open('account', authStore.activeAccountId)}
+                >⚙</button>
+            </div>
             <nav class="label-list">
-                {#each emailStore.labels as label}
-                    {#if label.labelType === 'system' && !HIDDEN_LABELS.has(label.name)}
-                        {@const info = getLabelInfo(label.name)}
-                        <button
-                            class="label-item"
-                            class:active={emailStore.currentLabelId === label.id}
-                            onclick={() => handleLabelClick(label.id)}
-                        >
-                            <span class="label-icon">{info.icon}</span>
-                            <span class="label-name" class:truncated={info.name.length > 18}>
-                                {info.name}
-                            </span>
-                            {#if label.messagesUnread > 0}
-                                <span class="unread-badge">{label.messagesUnread}</span>
-                            {/if}
-                        </button>
-                    {/if}
+                {#each labels as label (label.id)}
+                    {@const info = getLabelInfo(label.name)}
+                    <button
+                        class="label-item"
+                        class:active={emailStore.currentLabelId === label.id}
+                        aria-current={emailStore.currentLabelId === label.id ? 'true' : undefined}
+                        onclick={() => handleLabelClick(label.id)}
+                    >
+                        <span class="label-icon">{info.icon}</span>
+                        <span class="label-name" class:truncated={info.name.length > 18}>
+                            {info.name}
+                        </span>
+                        {#if label.messagesUnread > 0}
+                            <span class="unread-badge">{label.messagesUnread}</span>
+                        {/if}
+                    </button>
                 {/each}
             </nav>
         </div>
@@ -104,8 +79,8 @@
                 Compose New Message
             </button>
         {/if}
-        <button class="add-account-btn" onclick={handleAddAccount}>
-            + Add Account
+        <button class="settings-btn" onclick={() => settingsStore.open('app')}>
+            ⚙ 設定
         </button>
     </div>
 </aside>
@@ -168,20 +143,6 @@
         color: white;
     }
 
-    .remove-account-btn {
-        background: none;
-        border: none;
-        color: #ef4444;
-        font-size: 1.25rem;
-        cursor: pointer;
-        padding: 0.25rem 0.5rem;
-    }
-
-    .remove-account-btn:hover {
-        background-color: rgba(255, 0, 0, 0.15);
-        border-radius: 4px;
-    }
-
     .no-accounts {
         padding: 1rem;
         font-size: 0.875rem;
@@ -201,6 +162,9 @@
     }
 
     .labels-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
         color: #9ca3af;
         font-size: 0.75rem;
         font-weight: 600;
@@ -211,12 +175,46 @@
         margin-top: 0.5rem;
     }
 
+    .labels-settings-btn {
+        background: none;
+        border: none;
+        color: #9ca3af;
+        font-size: 0.875rem;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0.125rem 0.25rem;
+        border-radius: 4px;
+    }
+
+    .labels-settings-btn:hover {
+        background-color: rgba(255, 255, 255, 0.08);
+        color: #e5e7eb;
+    }
+
     .label-list {
         flex: 1;
         overflow-y: auto;
         display: flex;
         flex-direction: column;
         gap: 2px;
+    }
+
+    /* Scrollbar matches the message list's (6px, same thumb colours) */
+    .label-list::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .label-list::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .label-list::-webkit-scrollbar-thumb {
+        background-color: #4b5563;
+        border-radius: 3px;
+    }
+
+    .label-list::-webkit-scrollbar-thumb:hover {
+        background-color: #6b7280;
     }
 
     .label-item {
@@ -226,6 +224,7 @@
         padding: 0.5rem 0.75rem;
         background: none;
         border: none;
+        border-left: 3px solid transparent;
         border-radius: 8px;
         cursor: pointer;
         transition: background-color 0.15s;
@@ -240,9 +239,17 @@
         background-color: rgba(255, 255, 255, 0.08);
     }
 
+    /* Selected label: accent bar + filled background + bold text */
     .label-item.active {
-        background-color: rgba(66, 133, 244, 0.2);
-        color: #93c5fd;
+        background-color: rgba(66, 133, 244, 0.28);
+        border-left-color: #4285f4;
+        border-radius: 0 8px 8px 0;
+        color: #ffffff;
+        font-weight: 700;
+    }
+
+    .label-item.active .label-icon {
+        filter: drop-shadow(0 0 2px rgba(66, 133, 244, 0.9));
     }
 
     .label-icon {
@@ -280,11 +287,11 @@
         flex-shrink: 0;
     }
 
-    .add-account-btn {
+    .settings-btn {
         width: 100%;
         padding: 0.75rem;
-        background-color: #16a34a;
-        color: white;
+        background-color: #374151;
+        color: #e5e7eb;
         border: none;
         border-radius: 8px;
         cursor: pointer;
@@ -292,8 +299,8 @@
         font-family: inherit;
     }
 
-    .add-account-btn:hover {
-        background-color: #15803d;
+    .settings-btn:hover {
+        background-color: #4b5563;
     }
 
     .compose-btn {

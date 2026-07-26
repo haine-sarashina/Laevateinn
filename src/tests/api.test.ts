@@ -30,14 +30,16 @@ describe('api.safeInvoke', () => {
 
   it('throws after max retries exhausted', async () => {
     const api = await import('$lib/api');
-    // Use mockRejectedValueOnce to avoid polluting subsequent tests
-    mockedInvoke.mockRejectedValueOnce(new Error('persistent error'))
-      .mockRejectedValueOnce(new Error('persistent error'));
+    // safeInvoke tries once and then retries MAX_RETRIES (3) more times.
+    // Every attempt must reject, otherwise the call resolves instead of throwing.
+    mockedInvoke.mockRejectedValue(new Error('persistent error'));
     await expect(
       api.safeInvoke('failing_command')
     ).rejects.toThrow('persistent error');
-    // 2 attempts from safeInvoke retries + 1 from errorStore.set() -> log() invoke call = 3
-    expect(mockedInvoke).toHaveBeenCalledTimes(3);
+    // 4 attempts from safeInvoke + 1 from errorStore.set() -> log() invoke call
+    expect(mockedInvoke).toHaveBeenCalledTimes(5);
+    mockedInvoke.mockReset();
+    mockedInvoke.mockResolvedValue(undefined);
   });
 
   it('passes args to invoke', async () => {
@@ -248,11 +250,12 @@ describe('api.modifyLabels', () => {
 
   it('propagates errors from backend', async () => {
     const api = await import('$lib/api');
-    mockedInvoke
-      .mockRejectedValueOnce(new Error('API error'))
-      .mockRejectedValueOnce(new Error('API error'));
+    // Every retry must fail for the error to surface (see safeInvoke's MAX_RETRIES)
+    mockedInvoke.mockRejectedValue(new Error('API error'));
     await expect(
       api.modifyLabels('user@test.com', 'msg123', ['STARRED'], [])
     ).rejects.toThrow('API error');
+    mockedInvoke.mockReset();
+    mockedInvoke.mockResolvedValue(undefined);
   });
 });

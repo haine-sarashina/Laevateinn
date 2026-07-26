@@ -239,7 +239,7 @@ describe('EmailStore.reset()', () => {
 
     // Set up non-empty state
     emailStore.messages = [
-      { id: '1', threadId: 't1', snippet: 'Test', subject: 'S', from: 'a@b.com', date: 'today', body: '', read: false },
+      { id: '1', threadId: 't1', snippet: 'Test', subject: 'S', from: 'a@b.com', date: 'today', body: '', read: false, starred: false, important: false },
     ];
     emailStore.selectedMessage = {
       id: '1', snippet: 'Test', subject: 'S', from: 'a@b.com', date: 'today', body: '',

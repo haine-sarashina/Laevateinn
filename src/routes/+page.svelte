@@ -32,7 +32,7 @@
             await openUrl(result.auth_url);
         } catch (e) {
             console.error("Auth error:", e);
-            emailStore.error = "認証エラー: " + (e.message || e);
+            emailStore.error = "認証エラー: " + (e instanceof Error ? e.message : e);
         }
     }
 </script>

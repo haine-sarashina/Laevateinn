@@ -3,13 +3,14 @@
     import { authStore } from "$lib/stores/authStore.svelte";
     import Toast from "$lib/components/ui/Toast.svelte";
     import Sidebar from "$lib/components/Sidebar.svelte";
+    import SettingsModal from "$lib/components/SettingsModal.svelte";
+    import { settingsStore } from "$lib/stores/settingsStore.svelte";
     import { openUrl } from "@tauri-apps/plugin-opener";
     import { getCurrentWindow, PhysicalSize, PhysicalPosition } from "@tauri-apps/api/window";
     import { listen } from "@tauri-apps/api/event";
     import { safeInvoke } from "$lib/api";
     import { errorStore } from "$lib/stores/errorStore.svelte";
     import { useShortcuts } from "$lib/keyboardShortcuts";
-    import { themeStore } from "$lib/stores/themeStore.svelte";
 
     let { children } = $props();
     let hasRefreshed = $state(false);
@@ -26,6 +27,8 @@
     let unlistenShortcuts: any = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let unlistenAccountChange: any = null;
+    // Kept so the new-mail poller can be stopped on destroy.
+    let emailStoreRef: typeof import("$lib/stores/emailStore.svelte").emailStore | null = null;
 
     let showTimeout = setTimeout(async () => {
         windowReady = true;
@@ -95,6 +98,7 @@
                 return;
             }
             hasRefreshed = true;
+            settingsStore.close();
             try {
                 // Use authStore.syncAccounts() to reload account list from backend
                 await authStore.syncAccounts();
@@ -123,9 +127,10 @@
             authStore.notifyTokenRefreshed(event.payload);
         });
 
-        themeStore.init();
+        settingsStore.init();
         await authStore.initialize();
         const { emailStore } = await import("$lib/stores/emailStore.svelte");
+        emailStoreRef = emailStore;
         emailStore.reloginCallback = handleGoogleLogin;
 
         // Register emailStore.refresh as a token-refresh callback on authStore.
@@ -148,6 +153,9 @@
         // Register keyboard shortcuts (Gmail-compatible keymap)
         unlistenShortcuts = useShortcuts(emailStore, authStore);
 
+        // Periodic new-mail check (interval configured in the settings screen)
+        emailStore.startPolling(settingsStore.pollIntervalSec * 1000);
+
         appReady = true;
 
         // Restore window position, size, and maximized state
@@ -163,6 +171,7 @@
 
     // Clean up on destroy - moved outside the onMount block to avoid lifecycle error
     onDestroy(() => {
+        emailStoreRef?.stopPolling();
         if (unlistenAccountChange) unlistenAccountChange();
         if (unlistenOAuthAdded) unlistenOAuthAdded();
         if (unlistenOAuthError) unlistenOAuthError();
@@ -184,22 +193,13 @@
         overflow: hidden;
     }
 
-    /* Dark theme */
-    :global([data-theme="dark"]) {
+    /* Single dark palette — the theme switcher was removed by request. */
+    :global(:root) {
         --bg-primary: #1f2937;
         --bg-secondary: #111827;
         --text-primary: #e5e7eb;
         --text-secondary: #d1d5db;
         --border-color: #374151;
-    }
-
-    /* Light theme */
-    :global([data-theme="light"]) {
-        --bg-primary: #f9fafb;
-        --bg-secondary: #ffffff;
-        --text-primary: #1f2937;
-        --text-secondary: #6b7280;
-        --border-color: #e5e7eb;
     }
 
     :global(body) {
@@ -242,32 +242,6 @@
         user-select: none;
         padding: 0 0 0 12px;
         opacity: 1 !important;
-    }
-
-    .titlebar-actions {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        flex: 0 0 auto;
-    }
-
-    .theme-toggle {
-        -webkit-app-region: no-drag;
-        width: 32px;
-        height: 32px;
-        border: none;
-        background: none;
-        cursor: pointer;
-        font-size: 14px;
-        color: var(--text-secondary);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 4px;
-    }
-
-    .theme-toggle:hover {
-        background-color: rgba(128, 128, 128, 0.15);
     }
 
     .titlebar-controls {
@@ -321,9 +295,6 @@
 <div class="app">
     <div class="titlebar" data-tauri-drag-region={true}>
         <span class="titlebar-title" data-tauri-drag-region={true}>Laevateinn v0.1.3</span>
-        <div class="titlebar-actions">
-            <button class="theme-toggle" onclick={() => themeStore.toggle()} title="テーマ切替">{themeStore.currentTheme === 'dark' ? '☀' : '🌙'}</button>
-        </div>
         <div class="titlebar-controls">
             <button class="titlebar-btn" data-tauri-window-btn="minimize" title="最小化" onclick={() => getCurrentWindow().minimize()}>─</button>
             <button class="titlebar-btn" data-tauri-window-btn="maximize" title="最大化/元に戻す" onclick={async () => getCurrentWindow().toggleMaximize()}>□</button>
@@ -350,12 +321,16 @@
     </div>
     <div class="window-frame">
         <div class="layout">
-            <Sidebar onLogin={handleGoogleLogin} />
+            <Sidebar />
             <div class="main-content">
                 {@render children()}
             </div>
         </div>
     </div>
 </div>
+
+{#if settingsStore.isOpen}
+    <SettingsModal onAddAccount={handleGoogleLogin} />
+{/if}
 
 <Toast />
