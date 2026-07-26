@@ -118,7 +118,8 @@
       "PowerShell(\\(Get-CimInstance Win32_ComputerSystem\\).NumberOfLogicalProcessors)",
       "Bash(DEBUG_MODE=true pnpm run *)",
       "Bash(pnpm vitest *)",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Bash(xargs wc -l)"
     ]
   }
 }

@@ -100,49 +100,6 @@ const RETRO_SCHEMA = {
 
 // ========== HELPER FUNCTIONS ==========
 
-function findTasksMd() {
-  const fs = require('fs')
-  const path = require('path')
-
-  // 親ディレクトリの Obsidian プロジェクトフォルダを探索
-  const rootDir = process.cwd()
-  const possiblePaths = [
-    path.join(rootDir, 'src-tauri', 'tasks.md'),
-    path.join(rootDir, '..', 'Memo', 'projects', 'Laevateinn', 'tasks.md'),
-    path.join(rootDir, '..', 'Memo', 'retrospectives'), // retrospectives ディレクトリもチェック
-  ]
-
-  for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
-      log(`Found tasks file: ${p}`)
-      return p
-    }
-  }
-
-  // 親ディレクトリを遡って .obsidian/ を探す
-  let current = path.dirname(rootDir)
-  while (current !== path.dirname(current)) {
-    const obsidianPath = path.join(current, '.obsidian')
-    if (fs.existsSync(obsidianPath)) {
-      log(`Found Obsidian directory: ${obsidianPath}`)
-      // tasks.md を探索
-      try {
-        const files = fs.readdirSync(current)
-        for (const file of files) {
-          if (file === 'tasks.md') {
-            return path.join(current, file)
-          }
-        }
-      } catch (e) {}
-    }
-    current = path.dirname(current)
-  }
-
-  // デフォルト
-  log('No tasks.md found, using src-tauri/tasks.md')
-  return path.join(rootDir, 'src-tauri', 'tasks.md')
-}
-
 function splitIntoSubtasks(taskSpecs) {
   const subtasks = []
   for (const task of taskSpecs || []) {
@@ -187,31 +144,13 @@ if (!request) {
 // --- Phase 1: Assistant ---
 phase('Assistant')
 
-const tasksMdPath = findTasksMd()
-
 let assistantPrompt = `You are the assistant for a development team.\n` +
-  `Gather current project context from CLAUDE.md and recent git commits.\n`
-
-// Obsidian tasks.md を読み込む
-try {
-  const fs = require('fs')
-  if (fs.existsSync(tasksMdPath)) {
-    const tasksContent = fs.readFileSync(tasksMdPath, 'utf-8')
-    // [ ] で始まる未完了タスクのみ抽出
-    const uncompletedTasks = tasksContent
-      .split('\n')
-      .filter(line => line.trim().startsWith('- [ ]') || line.trim().startsWith('• [ ]'))
-      .slice(0, 20) // 最大20件に制限
-      .map(line => line.replace(/^[-•]\s*\[ \]\s*/, '').trim())
-      .join('\n')
-    assistantPrompt += `\n\nUNCOMPLETED TASKS (from ${tasksMdPath}):\n${uncompletedTasks}\n\n` +
-      `IMPORTANT: Prioritize these uncompleted tasks when generating implementation plans.`
-  }
-} catch (e) {
-  log(`Warning: Could not read tasks.md at ${tasksMdPath}: ${e.message}`)
-}
-
-assistantPrompt += `\n\nThe request is: "${request}"\n\n` +
+  `Gather current project context from CLAUDE.md and recent git commits.\n\n` +
+  `Also look for an uncompleted-tasks file using your Read/Glob tools, checking these locations in order:\n` +
+  `- src-tauri/tasks.md\n` +
+  `- ../Memo/projects/Laevateinn/tasks.md\n` +
+  `If found, extract lines starting with "- [ ]" or "• [ ]" (uncompleted tasks, up to 20) and prioritize them in your summary.\n\n` +
+  `The request is: "${request}"\n\n` +
   'Return only what\'s relevant to this request.'
 
 const assistantResult = await agent(assistantPrompt, { label: 'assistant', phase: 'Assistant', schema: ASSISTANT_SCHEMA, effort: 'max' })
