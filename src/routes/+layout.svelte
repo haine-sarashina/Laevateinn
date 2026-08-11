@@ -8,6 +8,9 @@
     import { openUrl } from "@tauri-apps/plugin-opener";
     import { getCurrentWindow, PhysicalSize, PhysicalPosition } from "@tauri-apps/api/window";
     import { listen } from "@tauri-apps/api/event";
+    import { check } from "@tauri-apps/plugin-updater";
+    import { relaunch } from "@tauri-apps/plugin-process";
+    import { ask } from "@tauri-apps/plugin-dialog";
     import { safeInvoke } from "$lib/api";
     import { errorStore } from "$lib/stores/errorStore.svelte";
     import { useShortcuts } from "$lib/keyboardShortcuts";
@@ -120,6 +123,25 @@
             console.log('[oauth] oauth-error event received!', event.payload);
             errorStore.set({ type: "OAuth Error", message: event.payload });
         });
+
+        // 起動時の自動アップデート確認（数秒後に非接触チェック）
+        setTimeout(async () => {
+            try {
+                const update = await check();
+                if (update) {
+                    const yes = await ask(`新しいバージョン (${update.version}) が見つかりました。\nアップデートをダウンロード・インストールして再起動しますか？\n\n${update.body || ""}`, {
+                        title: "Laevateinn 更新通知",
+                        kind: "info",
+                    });
+                    if (yes) {
+                        await update.downloadAndInstall();
+                        await relaunch();
+                    }
+                }
+            } catch (e) {
+                console.log("アプデ確認スキップ (開発モードやオフライン等):", e);
+            }
+        }, 4000);
 
         // Listen for token-refreshed events from backend (emitted after 401 retry succeeds)
         unlistenTokenRefreshed = await listen<string>("token-refreshed", (event) => {
@@ -294,7 +316,7 @@
 
 <div class="app">
     <div class="titlebar" data-tauri-drag-region={true}>
-        <span class="titlebar-title" data-tauri-drag-region={true}>Laevateinn v0.1.3</span>
+        <span class="titlebar-title" data-tauri-drag-region={true}>Laevateinn v0.3.0</span>
         <div class="titlebar-controls">
             <button class="titlebar-btn" data-tauri-window-btn="minimize" title="最小化" onclick={() => getCurrentWindow().minimize()}>─</button>
             <button class="titlebar-btn" data-tauri-window-btn="maximize" title="最大化/元に戻す" onclick={async () => getCurrentWindow().toggleMaximize()}>□</button>
