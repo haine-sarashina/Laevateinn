@@ -1,5 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 fn main() {
-    // Load environment variables from .env file (if present) in the current directory
-    let _ = dotenv::dotenv();
     laevateinn_lib::run();
 }

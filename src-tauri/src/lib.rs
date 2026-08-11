@@ -2,16 +2,9 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
 
-pub mod callback_server;
 pub mod commands;
-pub mod error;
 
-use commands::auth::{
-    add_account, get_accounts, remove_account, start_auth_flow, switch_active_for_account,
-};
-use commands::gmail::{get_message_details, list_labels, list_messages, modify_labels, send_email};
-use commands::logger::log_message;
-use commands::undo_send::{cancel_email};
+use commands::webview_manager::switch_account_webview;
 
 const STATE_FILE: &str = "window-state.json";
 
@@ -30,10 +23,6 @@ fn load_window_state_from_disk(
     let x = obj.get("x")?.as_i64()? as i32;
     let y = obj.get("y")?.as_i64()? as i32;
     let maximized = obj.get("maximized")?.as_bool()?;
-    println!(
-        "[state] restoring: w={} h={} x={} y={} maximized={}",
-        w, h, x, y, maximized
-    );
     Some((w, h, x, y, maximized))
 }
 
@@ -60,10 +49,6 @@ fn save_window_state_to_disk(
         &path,
         serde_json::to_string_pretty(&json).unwrap_or_default(),
     );
-    println!(
-        "[state] saved: w={} h={} x={} y={} maximized={}",
-        width, height, x, y, maximized
-    );
 }
 
 #[tauri::command]
@@ -82,10 +67,6 @@ fn save_window_state_cmd(
     y: i32,
     maximized: bool,
 ) {
-    println!(
-        "[state] save_cmd: w={} h={} x={} y={} maximized={}",
-        width, height, x, y, maximized
-    );
     save_window_state_to_disk(&app, width, height, x, y, maximized);
 }
 
@@ -100,107 +81,86 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let app_handle = app.handle().clone();
-            println!("[state] setup: starting window state restore");
 
             let (width, height, win_x, win_y, maximized) =
                 load_window_state_from_disk(&app_handle).unwrap_or((1200, 800, 0, 0, false));
 
-            // Sanity check: if saved size exceeds reasonable bounds, use defaults
             let (width, height) = if width > 10000 || height > 10000 {
-                println!(
-                    "[state] sanity check failed: w={} h={} > 10000, using defaults (1200x800)",
-                    width, height
-                );
                 (1200, 800)
             } else {
                 (width, height)
             };
 
             if let Some(win) = app_handle.get_webview_window("main") {
-                // Restore size (physical pixels, same as saved)
                 let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
                     width, height,
                 )));
-                // Restore position (physical pixels, same as saved)
                 if !maximized && (win_x != 0 || win_y != 0) {
                     let _ = win.set_position(tauri::Position::Physical(
                         tauri::PhysicalPosition::new(win_x, win_y),
                     ));
                 }
-                // Restore maximized state
                 if maximized {
                     let _ = win.maximize();
                 }
 
-                // Do NOT call win.show() here — the webview hasn't rendered yet,
-                // which causes a white flash. Instead we spawn a short delay to let
-                // the webview load its content before showing.
-                //
-                // Note: on_page_load is only available on WebviewWindowBuilder (build-time),
-                // not on the already-created WebviewWindow instance. A delay-based approach
-                // is the pragmatic solution for Tauri 2 with visible:false windows.
                 let show_win = win.clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    println!("[state] showing window after load delay");
                     let _ = show_win.show();
                 });
 
-                // Save state on close and exit
                 let save_handle = app_handle.clone();
                 let close_win = win.clone();
+                let resize_win = win.clone();
+
                 win.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { .. } = event {
-                        let h = save_handle.clone();
-                        let w = close_win.clone();
-                        let (width, height) = match w.inner_size() {
-                            Ok(s) => (s.width as u32, s.height as u32),
-                            Err(_) => (1200, 800),
-                        };
-                        let (x, y) = match w.outer_position() {
-                            Ok(p) => (p.x as i32, p.y as i32),
-                            Err(_) => (-1, -1),
-                        };
-                        let is_max = w.is_maximized().unwrap_or(false);
-                        eprintln!(
-                            "[state] close: w={} h={} x={} y={} maximized={}",
-                            width, height, x, y, is_max
-                        );
-                        save_window_state_to_disk(&h, width, height, x, y, is_max);
-                        h.exit(0);
+                    match event {
+                        tauri::WindowEvent::CloseRequested { .. } => {
+                            let h = save_handle.clone();
+                            let w = close_win.clone();
+                            let (width, height) = match w.inner_size() {
+                                Ok(s) => (s.width as u32, s.height as u32),
+                                Err(_) => (1200, 800),
+                            };
+                            let (x, y) = match w.outer_position() {
+                                Ok(p) => (p.x as i32, p.y as i32),
+                                Err(_) => (-1, -1),
+                            };
+                            let is_max = w.is_maximized().unwrap_or(false);
+                            save_window_state_to_disk(&h, width, height, x, y, is_max);
+                            h.exit(0);
+                        },
+                        tauri::WindowEvent::Resized(size) => {
+                            // Resize all child webviews to match the new size minus sidebar
+                            let scale_factor = resize_win.scale_factor().unwrap_or(1.0);
+                            let sidebar_width = 64.0;
+                            let width = (size.width as f64) / scale_factor - sidebar_width;
+                            let height = (size.height as f64) / scale_factor;
+                            
+                            if width > 0.0 && height > 0.0 {
+                                let logical_size = tauri::LogicalSize::new(width, height);
+                                let logical_pos = tauri::LogicalPosition::new(sidebar_width, 0.0);
+                                
+                                for (label, webview) in save_handle.webviews() {
+                                    if label.starts_with("acc_") {
+                                        let _ = webview.set_size(tauri::Size::Logical(logical_size));
+                                        let _ = webview.set_position(tauri::Position::Logical(logical_pos));
+                                    }
+                                }
+                            }
+                        },
+                        _ => {}
                     }
                 });
             }
 
-            // Note: Callback server is now started on-demand in start_auth_flow.
-            // Boot-time start removed to minimize port exposure time.
-
-            // Periodic cleanup of expired PKCE verifiers
-            tauri::async_runtime::spawn(async {
-                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
-                interval.tick().await;
-                loop {
-                    interval.tick().await;
-                    commands::auth::cleanup_expired_verifiers();
-                }
-            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             load_window_state,
             save_window_state_cmd,
-            get_accounts,
-            start_auth_flow,
-            add_account,
-            remove_account,
-            switch_active_for_account,
-            list_messages,
-            get_message_details,
-            list_labels,
-            send_email,
-            modify_labels,
-            cancel_email,
-            log_message
+            switch_account_webview
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
