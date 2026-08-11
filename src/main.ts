@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { ask, message } from "@tauri-apps/plugin-dialog";
@@ -14,6 +16,11 @@ let activeAccountId: string | null = null;
 
 // Initialize app
 async function init() {
+  // Set dynamic window title
+  const appWindow = getCurrentWindow();
+  const version = await getVersion();
+  await appWindow.setTitle(`Laevateinn v${version}`);
+
   // Check for updates in the background
   checkForUpdates();
 
