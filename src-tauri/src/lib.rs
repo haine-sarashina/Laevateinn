@@ -4,7 +4,7 @@ use tauri::Manager;
 
 pub mod commands;
 
-use commands::webview_manager::switch_account_webview;
+use commands::webview_manager::{switch_account_webview, hide_all_webviews, start_unread_server};
 
 const STATE_FILE: &str = "window-state.json";
 
@@ -81,6 +81,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let app_handle = app.handle().clone();
+
+            start_unread_server(app_handle.clone());
 
             let (width, height, win_x, win_y, maximized) =
                 load_window_state_from_disk(&app_handle).unwrap_or((1200, 800, 0, 0, false));
@@ -163,7 +165,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_window_state,
             save_window_state_cmd,
-            switch_account_webview
+            switch_account_webview,
+            hide_all_webviews
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

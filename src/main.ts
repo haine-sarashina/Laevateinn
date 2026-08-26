@@ -1,12 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { listen } from "@tauri-apps/api/event";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 
 interface Account {
   id: string;
   name: string;
   color: string;
+  unreadCount?: number;
 }
 
 let accounts: Account[] = [];
@@ -31,6 +33,16 @@ async function init() {
 
   renderSidebar();
 
+  // Listen for unread count updates
+  listen("unread_update", (event) => {
+    const payload = event.payload as { account_id: string, count: number };
+    const acc = accounts.find(a => a.id === payload.account_id);
+    if (acc && acc.unreadCount !== payload.count) {
+      acc.unreadCount = payload.count;
+      renderSidebar();
+    }
+  });
+
   // If we have accounts, switch to the first one
   if (accounts.length > 0) {
     await switchAccount(accounts[0].id);
@@ -43,13 +55,37 @@ function renderSidebar() {
   sidebar.innerHTML = "";
 
   accounts.forEach((account) => {
+    const btnContainer = document.createElement("div");
+    btnContainer.style.position = "relative";
+    btnContainer.style.display = "inline-block";
+
     const btn = document.createElement("button");
     btn.className = `account-btn ${activeAccountId === account.id ? "active" : ""}`;
     btn.style.backgroundColor = account.color;
     btn.textContent = account.name.charAt(0).toUpperCase();
     btn.title = account.name;
     btn.onclick = () => switchAccount(account.id);
-    sidebar.appendChild(btn);
+    
+    btnContainer.appendChild(btn);
+
+    if (account.unreadCount && account.unreadCount > 0) {
+      const badge = document.createElement("div");
+      badge.textContent = account.unreadCount > 99 ? "99+" : account.unreadCount.toString();
+      badge.style.position = "absolute";
+      badge.style.top = "0";
+      badge.style.right = "0";
+      badge.style.backgroundColor = "#D93025"; // Gmail red
+      badge.style.color = "white";
+      badge.style.fontSize = "10px";
+      badge.style.fontWeight = "bold";
+      badge.style.borderRadius = "10px";
+      badge.style.padding = "2px 5px";
+      badge.style.pointerEvents = "none";
+      badge.style.boxShadow = "0 1px 3px rgba(0,0,0,0.3)";
+      btnContainer.appendChild(badge);
+    }
+
+    sidebar.appendChild(btnContainer);
   });
 
   const addBtn = document.createElement("button");
@@ -151,8 +187,19 @@ function customPrompt(msg: string): Promise<string | null> {
 }
 
 async function addAccount() {
+  try {
+    await invoke("hide_all_webviews");
+  } catch (e) {
+    console.error("Failed to hide webviews:", e);
+  }
+
   const name = await customPrompt("Enter account name (e.g. Work, Personal):");
-  if (!name) return;
+  if (!name) {
+    if (activeAccountId) {
+      switchAccount(activeAccountId);
+    }
+    return;
+  }
 
   const id = `acc_${Date.now()}`;
   const colors = ["#DB4437", "#4285F4", "#0F9D58", "#F4B400", "#673AB7", "#3F51B5"];
