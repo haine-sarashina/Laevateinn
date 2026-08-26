@@ -90,11 +90,17 @@ pub async fn switch_account_webview(app: tauri::AppHandle, account_id: String) -
         let height = (window_size.height as f64) / scale_factor;
         
         let init_script = format!(r#"
-            setInterval(() => {{
-                let match = document.title.match(/\((\d+)\)/);
-                let count = match ? match[1] : '0';
-                fetch("http://127.0.0.1:14205/update?acc={}&count=" + count).catch(() => {{}});
-            }}, 3000);
+            if (window === window.top) {{
+                setInterval(() => {{
+                    let title = document.title;
+                    // Only update if we are reasonably sure it's the main window title
+                    if (title.includes("Gmail") || title.includes("Google")) {{
+                        let match = title.match(/\((\d+)\)/);
+                        let count = match ? match[1] : '0';
+                        fetch("http://127.0.0.1:14205/update?acc={}&count=" + count).catch(() => {{}});
+                    }}
+                }}, 3000);
+            }}
         "#, account_id);
 
         let builder = WebviewBuilder::new(&account_id, WebviewUrl::External("https://mail.google.com/".parse().unwrap()))
