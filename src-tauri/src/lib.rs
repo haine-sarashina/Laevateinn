@@ -92,6 +92,9 @@ pub fn run() {
             };
 
             if let Some(win) = app_handle.get_webview_window("main") {
+                let version = app_handle.package_info().version.to_string();
+                let _ = win.set_title(&format!("Laevateinn v{}", version));
+                
                 let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
                     width, height,
                 )));
