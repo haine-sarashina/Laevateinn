@@ -62,11 +62,58 @@ pub async fn hide_all_webviews(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub async fn switch_account_webview(app: tauri::AppHandle, account_id: String) -> Result<(), String> {
+fn create_account_webview(app: &tauri::AppHandle, account_id: &str, show: bool) -> Result<(), String> {
+    if app.get_webview(account_id).is_some() {
+        return Ok(());
+    }
+
     let main_window = app.get_window("main").ok_or("Main window not found")?;
     
-    // Hide all existing webviews that are accounts (start with acc_)
+    let profile_dir = app.path().app_data_dir().unwrap_or_default().join("profiles").join(account_id);
+    
+    let window_size = main_window.inner_size().unwrap_or_default();
+    let scale_factor = main_window.scale_factor().unwrap_or(1.0);
+    
+    let sidebar_width = 64.0;
+    let width = (window_size.width as f64) / scale_factor - sidebar_width;
+    let height = (window_size.height as f64) / scale_factor;
+    
+    let init_script = format!(r#"
+        if (window === window.top) {{
+            setInterval(() => {{
+                let title = document.title;
+                if (title.includes("Gmail") || title.includes("Google")) {{
+                    let match = title.match(/\((\d+)\)/);
+                    let count = match ? match[1] : '0';
+                    fetch("http://127.0.0.1:14205/update?acc={}&count=" + count).catch(() => {{}});
+                }}
+            }}, 3000);
+        }}
+    "#, account_id);
+
+    let builder = WebviewBuilder::new(account_id, WebviewUrl::External("https://mail.google.com/".parse().unwrap()))
+        .data_directory(profile_dir)
+        .transparent(true)
+        .incognito(false)
+        .initialization_script(&init_script);
+        
+    let child = main_window.add_child(
+        builder,
+        tauri::LogicalPosition::new(sidebar_width, 0.0),
+        tauri::LogicalSize::new(width.max(0.0), height.max(0.0)),
+    ).map_err(|e: tauri::Error| e.to_string())?;
+    
+    if show {
+        let _ = child.show();
+    } else {
+        let _ = child.hide();
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn switch_account_webview(app: tauri::AppHandle, account_id: String) -> Result<(), String> {
     for (label, webview) in app.webviews() {
         if label.starts_with("acc_") {
             if label == account_id {
@@ -76,47 +123,14 @@ pub async fn switch_account_webview(app: tauri::AppHandle, account_id: String) -
             }
         }
     }
+    create_account_webview(&app, &account_id, true)?;
+    Ok(())
+}
 
-    // Check if the target webview already exists
-    if app.get_webview(&account_id).is_none() {
-        let profile_dir = app.path().app_data_dir().unwrap_or_default().join("profiles").join(&account_id);
-        
-        let window_size = main_window.inner_size().unwrap_or_default();
-        let scale_factor = main_window.scale_factor().unwrap_or(1.0);
-        
-        // Calculate the position and size. The sidebar is 64px wide.
-        let sidebar_width = 64.0;
-        let width = (window_size.width as f64) / scale_factor - sidebar_width;
-        let height = (window_size.height as f64) / scale_factor;
-        
-        let init_script = format!(r#"
-            if (window === window.top) {{
-                setInterval(() => {{
-                    let title = document.title;
-                    // Only update if we are reasonably sure it's the main window title
-                    if (title.includes("Gmail") || title.includes("Google")) {{
-                        let match = title.match(/\((\d+)\)/);
-                        let count = match ? match[1] : '0';
-                        fetch("http://127.0.0.1:14205/update?acc={}&count=" + count).catch(() => {{}});
-                    }}
-                }}, 3000);
-            }}
-        "#, account_id);
-
-        let builder = WebviewBuilder::new(&account_id, WebviewUrl::External("https://mail.google.com/".parse().unwrap()))
-            .data_directory(profile_dir)
-            .transparent(true)
-            .incognito(false)
-            .initialization_script(&init_script);
-            
-        let child = main_window.add_child(
-            builder,
-            tauri::LogicalPosition::new(sidebar_width, 0.0),
-            tauri::LogicalSize::new(width.max(0.0), height.max(0.0)),
-        ).map_err(|e: tauri::Error| e.to_string())?;
-        
-        let _ = child.show();
+#[tauri::command]
+pub async fn spawn_background_webviews(app: tauri::AppHandle, account_ids: Vec<String>) -> Result<(), String> {
+    for account_id in account_ids {
+        let _ = create_account_webview(&app, &account_id, false);
     }
-    
     Ok(())
 }

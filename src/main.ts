@@ -43,7 +43,13 @@ async function init() {
     }
   });
 
-  // If we have accounts, switch to the first one
+  // Spawn background webviews for all accounts except the first one
+  if (accounts.length > 1) {
+    const backgroundIds = accounts.slice(1).map(a => a.id);
+    invoke("spawn_background_webviews", { accountIds: backgroundIds }).catch(console.error);
+  }
+
+  // If we have accounts, switch to the first one (this spawns the first one and shows it)
   if (accounts.length > 0) {
     await switchAccount(accounts[0].id);
   }
