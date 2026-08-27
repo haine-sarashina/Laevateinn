@@ -175,12 +175,17 @@ pub async fn spawn_background_webviews(app: tauri::AppHandle, account_ids: Vec<S
 }
 
 #[tauri::command]
-pub async fn set_app_badge(app: tauri::AppHandle, count: u32) -> Result<(), String> {
+pub async fn set_app_badge(app: tauri::AppHandle, count: u32, rgba: Option<Vec<u8>>) -> Result<(), String> {
     if let Some(main_window) = app.get_window("main") {
         if count > 0 {
             let _ = main_window.set_badge_count(Some(count as i64));
+            if let Some(rgba_bytes) = rgba {
+                let img = tauri::image::Image::new(&rgba_bytes, 32, 32);
+                let _ = main_window.set_overlay_icon(Some(img));
+            }
         } else {
             let _ = main_window.set_badge_count(None);
+            let _ = main_window.set_overlay_icon(None);
         }
     }
     Ok(())

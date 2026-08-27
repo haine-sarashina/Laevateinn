@@ -14,6 +14,32 @@ interface Account {
 let accounts: Account[] = [];
 let activeAccountId: string | null = null;
 
+function getBadgeRgba(count: number): number[] | null {
+  if (count <= 0) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 32;
+  canvas.height = 32;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  ctx.clearRect(0, 0, 32, 32);
+  ctx.beginPath();
+  ctx.arc(16, 16, 16, 0, Math.PI * 2);
+  ctx.fillStyle = "#D93025";
+  ctx.fill();
+
+  ctx.fillStyle = "white";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  
+  const text = count > 99 ? "99+" : count.toString();
+  ctx.font = "bold " + (text.length > 2 ? "12px" : "16px") + " sans-serif";
+  ctx.fillText(text, 16, 17);
+
+  const imgData = ctx.getImageData(0, 0, 32, 32);
+  return Array.from(imgData.data);
+}
+
 // Initialize app
 async function init() {
   // Check for updates in the background
@@ -42,7 +68,7 @@ async function init() {
       renderSidebar();
       
       const total = accounts.reduce((sum, a) => sum + (a.unreadCount || 0), 0);
-      invoke("set_app_badge", { count: total }).catch(console.error);
+      invoke("set_app_badge", { count: total, rgba: getBadgeRgba(total) }).catch(console.error);
     }
   });
 
