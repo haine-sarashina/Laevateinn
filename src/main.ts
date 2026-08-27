@@ -40,6 +40,9 @@ async function init() {
     if (acc && acc.unreadCount !== payload.count) {
       acc.unreadCount = payload.count;
       renderSidebar();
+      
+      const total = accounts.reduce((sum, a) => sum + (a.unreadCount || 0), 0);
+      invoke("set_app_badge", { count: total }).catch(console.error);
     }
   });
 

@@ -42,6 +42,29 @@ pub fn start_unread_server(app: tauri::AppHandle) {
                                     });
                                 }
                             }
+                        } else if req.starts_with("GET /open?url=") {
+                            let parts: Vec<&str> = req.split(' ').collect();
+                            if parts.len() > 1 {
+                                let path = parts[1];
+                                if let Some(url_param) = path.strip_prefix("/open?url=") {
+                                    let mut url = String::new();
+                                    let mut chars = url_param.chars();
+                                    while let Some(c) = chars.next() {
+                                        if c == '%' {
+                                            let hex = format!("{}{}", chars.next().unwrap_or('0'), chars.next().unwrap_or('0'));
+                                            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                                                url.push(byte as char);
+                                            }
+                                        } else if c == '+' {
+                                            url.push(' ');
+                                        } else {
+                                            url.push(c);
+                                        }
+                                    }
+                                    use tauri_plugin_opener::OpenerExt;
+                                    let _ = app.opener().open_url(url, None::<&str>);
+                                }
+                            }
                         }
                     }
                     let response = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\nOK";
@@ -82,12 +105,27 @@ fn create_account_webview(app: &tauri::AppHandle, account_id: &str, show: bool) 
         if (window === window.top) {{
             setInterval(() => {{
                 let title = document.title;
-                if (title.includes("Gmail") || title.includes("Google")) {{
-                    let match = title.match(/\((\d+)\)/);
-                    let count = match ? match[1] : '0';
-                    fetch("http://127.0.0.1:14205/update?acc={}&count=" + count).catch(() => {{}});
-                }}
+                let match = title.match(/\((\d+)\)/);
+                let count = match ? match[1] : '0';
+                fetch("http://127.0.0.1:14205/update?acc={}&count=" + count).catch(() => {{}});
             }}, 3000);
+            
+            document.addEventListener('click', (e) => {{
+                let target = e.target.closest('a');
+                if (target && target.href) {{
+                    let url = target.href;
+                    if (url.includes('google.com/url?q=')) {{
+                        let params = new URLSearchParams(url.split('?')[1]);
+                        if (params.has('q')) {{
+                            url = params.get('q');
+                        }}
+                    }}
+                    if (!url.startsWith('https://mail.google.com/') && !url.startsWith('javascript:')) {{
+                        e.preventDefault();
+                        fetch("http://127.0.0.1:14205/open?url=" + encodeURIComponent(url)).catch(() => {{}});
+                    }}
+                }}
+            }}, true);
         }}
     "#, account_id);
 
@@ -95,6 +133,7 @@ fn create_account_webview(app: &tauri::AppHandle, account_id: &str, show: bool) 
         .data_directory(profile_dir)
         .transparent(true)
         .incognito(false)
+        .disable_drag_drop_handler()
         .initialization_script(&init_script);
         
     let child = main_window.add_child(
@@ -131,6 +170,18 @@ pub async fn switch_account_webview(app: tauri::AppHandle, account_id: String) -
 pub async fn spawn_background_webviews(app: tauri::AppHandle, account_ids: Vec<String>) -> Result<(), String> {
     for account_id in account_ids {
         let _ = create_account_webview(&app, &account_id, false);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_app_badge(app: tauri::AppHandle, count: u32) -> Result<(), String> {
+    if let Some(main_window) = app.get_window("main") {
+        if count > 0 {
+            let _ = main_window.set_badge_count(Some(count as i64));
+        } else {
+            let _ = main_window.set_badge_count(None);
+        }
     }
     Ok(())
 }

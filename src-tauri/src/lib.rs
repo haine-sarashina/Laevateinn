@@ -4,7 +4,7 @@ use tauri::Manager;
 
 pub mod commands;
 
-use commands::webview_manager::{switch_account_webview, hide_all_webviews, start_unread_server, spawn_background_webviews};
+use commands::webview_manager::{switch_account_webview, hide_all_webviews, start_unread_server, spawn_background_webviews, set_app_badge};
 
 const STATE_FILE: &str = "window-state.json";
 
@@ -167,7 +167,8 @@ pub fn run() {
             save_window_state_cmd,
             switch_account_webview,
             hide_all_webviews,
-            spawn_background_webviews
+            spawn_background_webviews,
+            set_app_badge
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
