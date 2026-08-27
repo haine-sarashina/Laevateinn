@@ -21,9 +21,11 @@
     "core:window:allow-inner-position",
     "core:window:allow-start-dragging",
     "core:window:allow-is-maximized",
-    "dialog:allow-open",
+    "dialog:default",
     "fs:allow-read-file",
     "notification:default",
-    "opener:default"
+    "opener:default",
+    "updater:default",
+    "process:default"
   ]
 }
