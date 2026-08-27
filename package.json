@@ -1,6 +1,6 @@
 {
   "name": "laevateinn",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Multi-account Gmail client",
   "type": "module",
   "scripts": {
