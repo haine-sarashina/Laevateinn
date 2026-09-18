@@ -78,3 +78,11 @@ body {
 .add-btn:hover {
   border-color: var(--text-color);
 }
+
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}

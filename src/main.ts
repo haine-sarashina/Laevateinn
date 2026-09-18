@@ -57,6 +57,35 @@ async function init() {
   sidebar.id = "sidebar";
   appDiv.appendChild(sidebar);
 
+  const accountList = document.createElement("div");
+  accountList.id = "account-list";
+  accountList.style.display = "flex";
+  accountList.style.flexDirection = "column";
+  accountList.style.alignItems = "center";
+  accountList.style.gap = "16px";
+  accountList.style.flex = "1";
+  accountList.style.overflowY = "auto";
+  accountList.style.width = "100%";
+  
+  // Custom scrollbar hiding css
+  accountList.className = "hide-scrollbar";
+  sidebar.appendChild(accountList);
+
+  const sidebarBottom = document.createElement("div");
+  sidebarBottom.id = "sidebar-bottom";
+  sidebarBottom.style.padding = "16px 0";
+  sidebarBottom.style.display = "flex";
+  sidebarBottom.style.flexDirection = "column";
+  sidebarBottom.style.alignItems = "center";
+  sidebar.appendChild(sidebarBottom);
+
+  const settingsBtn = document.createElement("button");
+  settingsBtn.className = "account-btn add-btn";
+  settingsBtn.textContent = "⚙";
+  settingsBtn.title = "Settings";
+  settingsBtn.onclick = openSettings;
+  sidebarBottom.appendChild(settingsBtn);
+
   renderSidebar();
 
   // Listen for unread count updates
@@ -86,8 +115,8 @@ async function init() {
 
 // Render the sidebar UI
 function renderSidebar() {
-  const sidebar = document.getElementById("sidebar")!;
-  sidebar.innerHTML = "";
+  const accountList = document.getElementById("account-list")!;
+  accountList.innerHTML = "";
 
   accounts.forEach((account) => {
     const btnContainer = document.createElement("div");
@@ -109,7 +138,7 @@ function renderSidebar() {
       badge.style.position = "absolute";
       badge.style.top = "0";
       badge.style.right = "0";
-      badge.style.backgroundColor = "#D93025"; // Gmail red
+      badge.style.backgroundColor = "#D93025";
       badge.style.color = "white";
       badge.style.fontSize = "10px";
       badge.style.fontWeight = "bold";
@@ -120,7 +149,7 @@ function renderSidebar() {
       btnContainer.appendChild(badge);
     }
 
-    sidebar.appendChild(btnContainer);
+    accountList.appendChild(btnContainer);
   });
 
   const addBtn = document.createElement("button");
@@ -128,16 +157,7 @@ function renderSidebar() {
   addBtn.textContent = "+";
   addBtn.title = "Add Account";
   addBtn.onclick = addAccount;
-  sidebar.appendChild(addBtn);
-
-  const settingsBtn = document.createElement("button");
-  settingsBtn.className = "account-btn add-btn";
-  settingsBtn.textContent = "⚙";
-  settingsBtn.title = "Settings";
-  settingsBtn.style.marginTop = "auto";
-  settingsBtn.style.marginBottom = "16px";
-  settingsBtn.onclick = openSettings;
-  sidebar.appendChild(settingsBtn);
+  accountList.appendChild(addBtn);
 }
 
 async function switchAccount(id: string) {
@@ -321,6 +341,29 @@ function openSettings() {
 
   dialog.appendChild(list);
 
+  // Divider
+  const divider = document.createElement("hr");
+  divider.style.borderColor = "#555";
+  divider.style.margin = "20px 0";
+  dialog.appendChild(divider);
+
+  // System section
+  const systemTitle = document.createElement("h3");
+  systemTitle.textContent = "System";
+  systemTitle.style.marginBottom = "10px";
+  dialog.appendChild(systemTitle);
+
+  const updateBtn = document.createElement("button");
+  updateBtn.textContent = "Check for Updates";
+  updateBtn.style.padding = "8px 16px";
+  updateBtn.style.cursor = "pointer";
+  updateBtn.style.backgroundColor = "transparent";
+  updateBtn.style.color = "var(--text-color)";
+  updateBtn.style.border = "1px solid #555";
+  updateBtn.style.borderRadius = "4px";
+  updateBtn.onclick = manualCheckForUpdates;
+  dialog.appendChild(updateBtn);
+
   const closeBtn = document.createElement("button");
   closeBtn.textContent = "Close";
   closeBtn.style.marginTop = "20px";
@@ -352,6 +395,31 @@ function openSettings() {
 
 // Run init
 init();
+
+async function manualCheckForUpdates() {
+  try {
+    const update = await check();
+    if (update) {
+      const yes = await ask(
+        `新しいバージョン (${update.version}) が利用可能です。\n今すぐアップデートしますか？\n\nリリースノート:\n${update.body || "なし"}`,
+        {
+          title: "アップデートの確認",
+          kind: "info",
+        }
+      );
+      if (yes) {
+        await update.downloadAndInstall();
+        await message("アップデートが完了しました。アプリを再起動します。", { title: "アップデート完了" });
+        await relaunch();
+      }
+    } else {
+      await message("現在最新バージョンをご利用中です。", { title: "最新版", kind: "info" });
+    }
+  } catch (error) {
+    console.error("Failed to check for updates:", error);
+    await message("アップデートの確認に失敗しました。\n" + error, { title: "エラー", kind: "error" });
+  }
+}
 
 async function checkForUpdates() {
   try {
