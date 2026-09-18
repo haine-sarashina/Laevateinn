@@ -129,6 +129,15 @@ function renderSidebar() {
   addBtn.title = "Add Account";
   addBtn.onclick = addAccount;
   sidebar.appendChild(addBtn);
+
+  const settingsBtn = document.createElement("button");
+  settingsBtn.className = "account-btn add-btn";
+  settingsBtn.textContent = "⚙";
+  settingsBtn.title = "Settings";
+  settingsBtn.style.marginTop = "auto";
+  settingsBtn.style.marginBottom = "16px";
+  settingsBtn.onclick = openSettings;
+  sidebar.appendChild(settingsBtn);
 }
 
 async function switchAccount(id: string) {
@@ -247,6 +256,98 @@ async function addAccount() {
 
 function saveAccounts() {
   localStorage.setItem("accounts", JSON.stringify(accounts));
+}
+
+function openSettings() {
+  invoke("hide_all_webviews").catch(console.error);
+
+  const dialog = document.createElement("dialog");
+  dialog.style.padding = "20px";
+  dialog.style.borderRadius = "8px";
+  dialog.style.border = "none";
+  dialog.style.boxShadow = "0 4px 12px rgba(0,0,0,0.5)";
+  dialog.style.backgroundColor = "var(--bg-color)";
+  dialog.style.color = "var(--text-color)";
+  dialog.style.width = "400px";
+
+  const title = document.createElement("h2");
+  title.textContent = "Settings";
+  title.style.marginBottom = "20px";
+  dialog.appendChild(title);
+
+  const list = document.createElement("div");
+  list.style.display = "flex";
+  list.style.flexDirection = "column";
+  list.style.gap = "10px";
+
+  accounts.forEach((acc) => {
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.alignItems = "center";
+    row.style.gap = "10px";
+    
+    const label = document.createElement("div");
+    label.style.width = "20px";
+    label.style.height = "20px";
+    label.style.borderRadius = "50%";
+    label.style.backgroundColor = acc.color;
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = acc.name;
+    input.style.flex = "1";
+    input.style.padding = "8px";
+    input.style.border = "1px solid #555";
+    input.style.borderRadius = "4px";
+    input.style.backgroundColor = "#202124";
+    input.style.color = "#fff";
+    
+    input.addEventListener("change", () => {
+      acc.name = input.value;
+      saveAccounts();
+      renderSidebar();
+    });
+
+    row.appendChild(label);
+    row.appendChild(input);
+    list.appendChild(row);
+  });
+
+  if (accounts.length === 0) {
+    const emptyMsg = document.createElement("p");
+    emptyMsg.textContent = "No accounts added yet.";
+    list.appendChild(emptyMsg);
+  }
+
+  dialog.appendChild(list);
+
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "Close";
+  closeBtn.style.marginTop = "20px";
+  closeBtn.style.padding = "8px 16px";
+  closeBtn.style.cursor = "pointer";
+  closeBtn.style.backgroundColor = "#4285F4";
+  closeBtn.style.color = "#fff";
+  closeBtn.style.border = "none";
+  closeBtn.style.borderRadius = "4px";
+  closeBtn.style.float = "right";
+  closeBtn.onclick = () => {
+    dialog.close();
+    dialog.remove();
+    if (activeAccountId) {
+      switchAccount(activeAccountId);
+    }
+  };
+
+  dialog.appendChild(closeBtn);
+  
+  // Clear floats
+  const clearFix = document.createElement("div");
+  clearFix.style.clear = "both";
+  dialog.appendChild(clearFix);
+
+  document.body.appendChild(dialog);
+  dialog.showModal();
 }
 
 // Run init
